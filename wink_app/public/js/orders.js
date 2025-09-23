@@ -1,25 +1,23 @@
 // js/orders.js
 
 document.addEventListener('DOMContentLoaded', async () => {
-    const API_BASE_URL = 'https://test.winkexpress.online';
+    const API_BASE_URL = 'https://app.winkexpress.online';
 
     // --- Références DOM ---
     const ordersTableBody = document.getElementById('ordersTableBody');
     const selectAllCheckbox = document.getElementById('selectAllCheckbox');
     const bulkActionsDropdown = document.getElementById('bulkActionsDropdown');
     const addOrderModal = new bootstrap.Modal(document.getElementById('addOrderModal'));
-    const addShopModal = new bootstrap.Modal(document.getElementById('addShopModal')); // NOUVEAU
+    const addShopModal = new bootstrap.Modal(document.getElementById('addShopModal'));
     const editOrderModal = new bootstrap.Modal(document.getElementById('editOrderModal'));
     const statusActionModal = new bootstrap.Modal(document.getElementById('statusActionModal'));
     const assignDeliveryModal = new bootstrap.Modal(document.getElementById('assignDeliveryModal'));
     const orderDetailsModal = new bootstrap.Modal(document.getElementById('orderDetailsModal'));
-    
-    // Correction : Création des modales pour les actions groupées
     const bulkStatusActionModal = new bootstrap.Modal(document.getElementById('bulkStatusActionModal'));
     const bulkFailedDeliveryModal = new bootstrap.Modal(document.getElementById('bulkFailedDeliveryModal'));
 
     const addOrderForm = document.getElementById('addOrderForm');
-    const addShopForm = document.getElementById('addShopForm'); // NOUVEAU
+    const addShopForm = document.getElementById('addShopForm');
     const editOrderForm = document.getElementById('editOrderForm');
     const failedDeliveryForm = document.getElementById('failedDeliveryForm');
     const deliveredPaymentForm = document.getElementById('deliveredPaymentForm');
@@ -63,11 +61,22 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const selectedOrdersIdsSpan = document.getElementById('selectedOrdersIds');
     
+    // --- Éléments de pagination ---
+    const itemsPerPageSelect = document.getElementById('itemsPerPage');
+    const paginationInfo = document.getElementById('paginationInfo');
+    const firstPageBtn = document.getElementById('firstPage');
+    const prevPageBtn = document.getElementById('prevPage');
+    const currentPageDisplay = document.getElementById('currentPageDisplay');
+    const nextPageBtn = document.getElementById('nextPage');
+    const lastPageBtn = document.getElementById('lastPage');
+
     let allOrders = [];
     let shopsCache = [];
     let deliverymenCache = [];
     const CURRENT_USER_ID = 1;
     let currentOrdersToAssign = [];
+    let currentPage = 1;
+    let itemsPerPage = 10;
 
     const statusTranslations = {
         'pending': 'En attente', 'in_progress': 'En cours', 'delivered': 'Livrée',
@@ -119,12 +128,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         element.innerHTML = '<tr><td colspan="12" class="text-center p-4"><div class="spinner-border text-corail" role="status"><span class="visually-hidden">Chargement...</span></div></td></tr>';
     };
 
-    const fetchAllData = async () => {
+    const fetchAllOrders = async () => {
         showLoading(ordersTableBody);
-        await applyFilters();
-    };
-
-    const applyFilters = async () => {
         const searchText = searchInput.value;
         const startDate = startDateFilter.value;
         const endDate = endDateFilter.value;
@@ -138,21 +143,27 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             const ordersRes = await axios.get(`${API_BASE_URL}/orders`, { params });
             allOrders = ordersRes.data;
-            renderOrdersTable(allOrders);
+            currentPage = 1;
+            renderOrders();
         } catch (error) {
-            console.error("Erreur lors de l'application des filtres:", error);
-            ordersTableBody.innerHTML = `<tr><td colspan="12" class="text-center text-danger p-4">Erreur lors du filtrage des données.</td></tr>`;
+            console.error("Erreur lors de la récupération des commandes:", error);
+            ordersTableBody.innerHTML = `<tr><td colspan="12" class="text-center text-danger p-4">Erreur lors du chargement des données.</td></tr>`;
         }
     };
 
-    const renderOrdersTable = (orders) => {
+    const renderOrders = () => {
         ordersTableBody.innerHTML = '';
-        if (!orders || orders.length === 0) {
+        if (!allOrders || allOrders.length === 0) {
             ordersTableBody.innerHTML = `<tr><td colspan="12" class="text-center p-3">Aucune commande trouvée.</td></tr>`;
+            updatePaginationInfo(0);
             return;
         }
 
-        orders.forEach(order => {
+        const startIndex = (currentPage - 1) * itemsPerPage;
+        const endIndex = startIndex + itemsPerPage;
+        const ordersToRender = allOrders.slice(startIndex, endIndex);
+
+        ordersToRender.forEach(order => {
             const row = document.createElement('tr');
             const totalArticleAmount = parseFloat(order.article_amount || 0);
             const deliveryFee = parseFloat(order.delivery_fee || 0);
@@ -214,11 +225,40 @@ document.addEventListener('DOMContentLoaded', async () => {
                 `;
             ordersTableBody.appendChild(row);
         });
-
+        
+        updatePaginationInfo(allOrders.length);
+        
         const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
         tooltipTriggerList.map(function(tooltipTriggerEl) {
             return new bootstrap.Tooltip(tooltipTriggerEl);
         });
+    };
+
+    const updatePaginationInfo = (totalItems) => {
+        const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+        currentPageDisplay.textContent = currentPage;
+        if (paginationInfo) paginationInfo.textContent = `Page ${currentPage} sur ${totalPages} (${totalItems} commandes)`;
+        firstPageBtn.classList.toggle('disabled', currentPage === 1);
+        prevPageBtn.classList.toggle('disabled', currentPage === 1);
+        nextPageBtn.classList.toggle('disabled', currentPage === totalPages || totalPages === 0);
+        lastPageBtn.classList.toggle('disabled', currentPage === totalPages || totalPages === 0);
+    };
+
+    const handlePageChange = (newPage) => {
+        const totalPages = Math.ceil(allOrders.length / itemsPerPage);
+        if (newPage < 1 || newPage > totalPages) return;
+        currentPage = newPage;
+        renderOrders();
+    };
+
+    const debounce = (func, delay = 500) => {
+        let timeout;
+        return (...args) => {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => {
+                func.apply(this, args);
+            }, delay);
+        };
     };
 
     const addItemRow = (container, item = {}) => {
@@ -282,7 +322,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    // NOUVEAU : Gère la soumission du formulaire de création de marchand
     addShopForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const shopData = {
@@ -297,9 +336,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
             const response = await axios.post(`${API_BASE_URL}/shops`, shopData);
             showNotification('Marchand créé avec succès !');
-            // Met à jour le cache des marchands
             await fetchShops();
-            // Sélectionne le nouveau marchand dans le formulaire de commande
             const newShop = shopsCache.find(s => s.id === response.data.shopId);
             if(newShop){
                 addShopSearchInput.value = newShop.name;
@@ -326,7 +363,6 @@ document.addEventListener('DOMContentLoaded', async () => {
              return;
         }
 
-        // CORRECTION DE LA LOGIQUE: On somme les montants, sans multiplier par la quantité.
         const totalArticleAmount = items.reduce((sum, item) => sum + item.amount, 0);
 
         const orderData = {
@@ -345,7 +381,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             await axios.post(`${API_BASE_URL}/orders`, orderData);
             showNotification('Commande créée avec succès !');
             addOrderModal.hide();
-            await fetchAllData();
+            await fetchAllOrders();
         } catch (error) {
             console.error("Erreur (ajout commande):", error);
             showNotification('Erreur lors de la création de la commande.', 'danger');
@@ -361,7 +397,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             amount: parseFloat(row.querySelector('.item-amount-input').value)
         }));
         
-        // CORRECTION DE LA LOGIQUE: On somme les montants, sans multiplier par la quantité.
         const totalArticleAmount = items.reduce((sum, item) => sum + item.amount, 0);
         
         const expeditionFee = editIsExpeditionCheckbox.checked ? parseFloat(editExpeditionFeeInput.value) : 0;
@@ -384,7 +419,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             await axios.put(`${API_BASE_URL}/orders/${orderId}`, updatedData);
             showNotification('Commande modifiée avec succès !');
             editOrderModal.hide();
-            await fetchAllData();
+            await fetchAllOrders();
         } catch (error) {
             console.error("Erreur (modif commande):", error);
             showNotification('Erreur lors de la modification de la commande.', 'danger');
@@ -457,7 +492,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 try {
                     await axios.delete(`${API_BASE_URL}/orders/${orderId}`);
                     showNotification('Commande supprimée avec succès.');
-                    await fetchAllData();
+                    await fetchAllOrders();
                 } catch (error) {
                     console.error(error);
                     showNotification('Erreur lors de la suppression de la commande.', 'danger');
@@ -474,7 +509,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     await axios.put(`${API_BASE_URL}/orders/${orderId}/status`, { status: 'delivered', payment_status: 'cash', userId: 1 });
                     showNotification('Statut mis à jour en Livré (paiement cash).');
                     statusActionModal.hide();
-                    await fetchAllData();
+                    await fetchAllOrders();
                 } catch (error) {
                     console.error(error);
                     showNotification('Erreur lors de la mise à jour du statut.', 'danger');
@@ -486,7 +521,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     await axios.put(`${API_BASE_URL}/orders/${orderId}/status`, { status: 'delivered', payment_status: 'paid_to_supplier', userId: 1 });
                     showNotification('Statut mis à jour en Livré (paiement au marchand).');
                     statusActionModal.hide();
-                    await fetchAllData();
+                    await fetchAllOrders();
                 } catch (error) {
                     console.error(error);
                     showNotification('Erreur lors de la mise à jour du statut.', 'danger');
@@ -507,7 +542,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     await axios.put(`${API_BASE_URL}/orders/${orderId}/status`, { status: 'failed_delivery', amount_received: amountReceived, userId: 1 });
                     showNotification('Statut mis à jour en Livraison ratée.');
                     statusActionModal.hide();
-                    await fetchAllData();
+                    await fetchAllOrders();
                 } catch (error) {
                     console.error(error);
                     showNotification('Erreur lors de la mise à jour du statut.', 'danger');
@@ -518,7 +553,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             try {
                 await axios.put(`${API_BASE_URL}/orders/${orderId}/status`, { status: 'reported', payment_status: 'pending', userId: 1 });
                 showNotification('Statut mis à jour en À relancer.');
-                await fetchAllData();
+                await fetchAllOrders();
             } catch (error) {
                 console.error(error);
                 showNotification('Erreur lors de la mise à jour du statut.', 'danger');
@@ -527,7 +562,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             try {
                 await axios.put(`${API_BASE_URL}/orders/${orderId}/status`, { status: 'cancelled', payment_status: 'cancelled', userId: 1 });
                 showNotification('Commande annulée.');
-                await fetchAllData();
+                await fetchAllOrders();
             } catch (error) {
                 console.error(error);
                 showNotification('Erreur lors de l\'annulation de la commande.', 'danger');
@@ -630,7 +665,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         showNotification("Erreur lors de la mise à jour des statuts.", 'danger');
                     } finally {
                         bulkStatusActionModal.hide();
-                        await fetchAllData();
+                        await fetchAllOrders();
                     }
                 };
                 
@@ -645,7 +680,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         showNotification("Erreur lors de la mise à jour des statuts.", 'danger');
                     } finally {
                         bulkStatusActionModal.hide();
-                        await fetchAllData();
+                        await fetchAllOrders();
                     }
                 };
 
@@ -664,7 +699,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         showNotification("Erreur lors de la mise à jour des statuts.", 'danger');
                     } finally {
                         bulkFailedDeliveryModal.hide();
-                        await fetchAllData();
+                        await fetchAllOrders();
                     }
                 };
             } else if (action.classList.contains('bulk-status-reported-btn')) {
@@ -673,7 +708,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 );
                 await Promise.all(promises);
                 showNotification(`${selectedIds.length} commande(s) mise(s) à jour en À relancer.`);
-                await fetchAllData();
+                await fetchAllOrders();
             } else if (action.classList.contains('bulk-status-cancel-btn')) {
                 if (confirm(`Voulez-vous vraiment annuler ${selectedIds.length} commande(s) ?`)) {
                     const promises = selectedIds.map(id =>
@@ -681,7 +716,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     );
                     await Promise.all(promises);
                     showNotification(`${selectedIds.length} commande(s) annulée(s).`);
-                    await fetchAllData();
+                    await fetchAllOrders();
                 }
             } else if (action.classList.contains('bulk-delete-btn')) {
                 if (confirm(`Voulez-vous vraiment supprimer ${selectedIds.length} commande(s) ?`)) {
@@ -690,13 +725,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                     );
                     await Promise.all(promises);
                     showNotification(`${selectedIds.length} commande(s) supprimée(s).`);
-                    await fetchAllData();
+                    await fetchAllOrders();
                 }
             }
         } catch(err) {
             console.error(err);
             showNotification("Une erreur inattendue est survenue.", 'danger');
-            await fetchAllData();
+            await fetchAllOrders();
         }
     });
 
@@ -727,7 +762,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         } finally {
             assignDeliveryModal.hide();
             currentOrdersToAssign = [];
-            await fetchAllData();
+            await fetchAllOrders();
         }
     });
 
@@ -815,21 +850,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     startDateFilter.value = today;
     endDateFilter.value = today;
 
-    searchInput.addEventListener('input', applyFilters);
-    startDateFilter.addEventListener('change', applyFilters);
-    endDateFilter.addEventListener('change', applyFilters);
+    // Ajout d'un debounce pour la recherche par texte afin d'éviter trop de requêtes
+    const debouncedFetchAllOrders = debounce(fetchAllOrders);
+    searchInput.addEventListener('input', debouncedFetchAllOrders);
+    startDateFilter.addEventListener('change', fetchAllOrders);
+    endDateFilter.addEventListener('change', fetchAllOrders);
     
     statusFilterMenu.addEventListener('click', (e) => {
         const option = e.target.closest('.status-filter-option');
         if (option) {
             selectedStatusFilter = option.dataset.status;
             statusFilterBtn.textContent = `Statut : ${option.textContent}`;
-            applyFilters();
+            fetchAllOrders();
         }
     });
+    
+    filterBtn.addEventListener('click', fetchAllOrders);
+
+    // Écouteurs pour la pagination
+    itemsPerPageSelect?.addEventListener('change', (e) => {
+        itemsPerPage = parseInt(e.target.value);
+        currentPage = 1;
+        renderOrders();
+    });
+    firstPageBtn?.addEventListener('click', (e) => { e.preventDefault(); handlePageChange(1); });
+    prevPageBtn?.addEventListener('click', (e) => { e.preventDefault(); handlePageChange(currentPage - 1); });
+    nextPageBtn?.addEventListener('click', (e) => { e.preventDefault(); handlePageChange(currentPage + 1); });
+    lastPageBtn?.addEventListener('click', (e) => { e.preventDefault(); handlePageChange(Math.ceil(allOrders.length / itemsPerPage)); });
 
     await Promise.all([fetchShops(), fetchDeliverymen()]);
-    await fetchAllData();
+    await fetchAllOrders();
     setupShopSearch('shopSearchInput', 'searchResults', 'selectedShopId');
     setupShopSearch('editShopSearchInput', 'editSearchResults', 'editSelectedShopId');
     setupDeliverymanSearch();
@@ -837,7 +887,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     editAddItemBtn.addEventListener('click', () => addItemRow(editItemsContainer));
     handleRemoveItem(itemsContainer);
     handleRemoveItem(editItemsContainer);
-    filterBtn.addEventListener('click', applyFilters);
     
     const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
     tooltipTriggerList.map(function(tooltipTriggerEl) {
