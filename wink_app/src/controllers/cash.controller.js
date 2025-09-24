@@ -59,11 +59,11 @@ const getExpenseCategories = async (req, res) => {
 
 const createExpense = async (req, res) => {
     try {
-        const { user_id, category_id, amount, comment } = req.body;
+        const { user_id, category_id, amount, comment, created_at } = req.body;
         if (!user_id || !category_id || !amount) {
             return res.status(400).json({ message: "Tous les champs sont requis pour créer une dépense." });
         }
-        const transactionData = { user_id, type: 'expense', category_id, amount: -Math.abs(amount), comment };
+        const transactionData = { user_id, type: 'expense', category_id, amount: -Math.abs(amount), comment, created_at };
         await cashModel.create(transactionData);
         res.status(201).json({ message: "Dépense enregistrée avec succès." });
     } catch (error) {
@@ -74,11 +74,11 @@ const createExpense = async (req, res) => {
 
 const createManualWithdrawal = async (req, res) => {
     try {
-        const { amount, comment, user_id } = req.body;
+        const { amount, comment, user_id, created_at } = req.body;
         if (!amount || !user_id) {
             return res.status(400).json({ message: "Le montant et l'ID de l'utilisateur sont requis." });
         }
-        const transactionData = { user_id, type: 'manual_withdrawal', amount: -Math.abs(amount), comment, category_id: null };
+        const transactionData = { user_id, type: 'manual_withdrawal', amount: -Math.abs(amount), comment, created_at, category_id: null };
         await cashModel.create(transactionData);
         res.status(201).json({ message: "Décaissement enregistré avec succès." });
     } catch (error) {
