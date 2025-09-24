@@ -180,22 +180,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 reportContent += `*--- RÉSUMÉ FINANCIER ---*\n`;
                 reportContent += `*Total encaissement (Cash/Raté) :* ${formatAmount(reportDetails.total_revenue_articles)}\n`;
-                
-                // Correction : affichage conditionnel des frais
-                if (parseFloat(reportDetails.total_delivery_fees) > 0) {
-                    reportContent += `*Total Frais de livraison :* ${formatAmount(reportDetails.total_delivery_fees)}\n`;
-                }
-                if (parseFloat(reportDetails.total_packaging_fees) > 0) {
-                    reportContent += `*Total Frais d'emballage :* ${formatAmount(reportDetails.total_packaging_fees)}\n`;
-                }
-                if (parseFloat(reportDetails.total_storage_fees) > 0) {
-                    reportContent += `*Total Frais de stockage (jour) :* ${formatAmount(reportDetails.total_storage_fees)}\n`;
-                }
-                if (parseFloat(reportDetails.previous_debts) > 0) {
-                    reportContent += `*Créances antérieures :* ${formatAmount(reportDetails.previous_debts)}\n`;
-                }
-
-                reportContent += `\n*MONTANT NET À VERSER :* ${formatAmount(reportDetails.amount_to_remit)}\n`;
+                reportContent += `*Total Frais de livraison :* ${formatAmount(reportDetails.total_delivery_fees)}\n`;
+                reportContent += `*Total Frais d'emballage :* ${formatAmount(reportDetails.total_packaging_fees)}\n`;
+                reportContent += `*Créances antérieures :* ${formatAmount(reportDetails.previous_debts)}\n`;
+                reportContent += `*Frais de stockage (cumulés) :* ${formatAmount(reportDetails.total_storage_fees)}\n\n`;
+                reportContent += `*MONTANT NET À VERSER :* ${formatAmount(reportDetails.amount_to_remit)}\n`;
                 
                 await navigator.clipboard.writeText(reportContent);
                 showNotification(`Le rapport détaillé pour "${reportDetails.shop_name}" a été copié !`);
