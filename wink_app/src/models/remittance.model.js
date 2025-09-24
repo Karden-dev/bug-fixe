@@ -9,139 +9,138 @@ const init = (connection) => {
 
 const findForRemittance = async (filters = {}) => {
     const { search, startDate, endDate, status } = filters;
-    
-    let params = [];
-    let whereClauses = ["s.status = 'actif'"];
+    const params = [];
 
-    if (search) {
-        whereClauses.push(`(s.name LIKE ? OR s.payment_name LIKE ? OR s.phone_number_for_payment LIKE ?)`);
-        params.push(`%${search}%`, `%${search}%`, `%${search}%`);
-    }
-
-    const query = `
+    let query = `
         SELECT
             s.id AS shop_id,
             s.name AS shop_name,
-            s.payment_name,
-            s.phone_number_for_payment,
-            s.payment_operator,
-            COALESCE(payouts.total_orders_payout, 0) AS total_orders_payout,
-            COALESCE(debts.total_pending_debt, 0) AS total_pending_debt,
-            COALESCE(remittances.total_remitted, 0) AS total_remitted
+            s.payment_name AS payment_name,
+            s.phone_number_for_payment AS phone_number_for_payment,
+            s.payment_operator AS payment_operator,
+            COALESCE(SUM(
+                CASE
+                    WHEN o.status = 'delivered' AND o.payment_status = 'cash' THEN o.article_amount - o.delivery_fee
+                    WHEN o.status = 'delivered' AND o.payment_status = 'paid_to_supplier' THEN -o.delivery_fee
+                    WHEN o.status = 'failed_delivery' THEN o.amount_received - o.delivery_fee
+                    ELSE 0
+                END
+            ), 0) AS orders_payout_amount,
+            (SELECT COALESCE(SUM(amount), 0) FROM debts WHERE shop_id = s.id AND status = 'pending') AS total_debt_amount,
+            (SELECT COALESCE(SUM(amount), 0) FROM remittances WHERE shop_id = s.id AND status IN ('paid', 'partially_paid')) AS total_remitted_amount
         FROM shops s
-        LEFT JOIN (
-            -- Calcule le gain net total de TOUTES les commandes
-            SELECT 
-                shop_id, 
-                SUM(
+        LEFT JOIN orders o ON s.id = o.shop_id
+    `;
+
+    let whereClause = ` WHERE 1=1 `;
+    
+    if (search) {
+        whereClause += ` AND (s.name LIKE ? OR s.payment_name LIKE ? OR s.phone_number_for_payment LIKE ?)`;
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+
+    if (startDate && endDate) {
+        whereClause += ` AND o.created_at BETWEEN ? AND ?`;
+        params.push(moment(startDate).startOf('day').format('YYYY-MM-DD HH:mm:ss'), moment(endDate).endOf('day').format('YYYY-MM-DD HH:mm:ss'));
+    }
+
+    query += whereClause + ` GROUP BY s.id ORDER BY s.name ASC`;
+    const [shops] = await dbConnection.execute(query, params);
+
+    const remittancesWithStatus = shops.map(shop => {
+        const totalOrdersPayout = parseFloat(shop.orders_payout_amount);
+        const totalDebt = parseFloat(shop.total_debt_amount);
+        const totalRemitted = parseFloat(shop.total_remitted_amount);
+        
+        const currentBalance = totalOrdersPayout - totalDebt - totalRemitted;
+
+        let shopStatus;
+        if (currentBalance > 0) {
+            shopStatus = 'pending';
+        } else if (currentBalance === 0) {
+            shopStatus = 'paid';
+        } else if (currentBalance < 0) {
+            shopStatus = 'partially_paid';
+        }
+
+        return {
+            ...shop,
+            total_payout_amount: currentBalance,
+            status: shopStatus
+        };
+    });
+
+    // Si le statut est spécifié, on filtre la liste. Sinon, on retourne la liste complète.
+    if (status) {
+        return remittancesWithStatus.filter(shop => shop.status === status);
+    }
+    
+    return remittancesWithStatus;
+};
+
+const getShopDetails = async (shopId) => {
+    const connection = await dbConnection.getConnection();
+    try {
+        const [remittances] = await connection.execute(
+            'SELECT * FROM remittances WHERE shop_id = ? ORDER BY payment_date DESC',
+            [shopId]
+        );
+
+        const [debts] = await connection.execute(
+            'SELECT * FROM debts WHERE shop_id = ? AND status = "pending" ORDER BY created_at DESC',
+            [shopId]
+        );
+        
+        const [ordersPayout] = await connection.execute(
+             `
+             SELECT
+                COALESCE(SUM(
                     CASE
                         WHEN status = 'delivered' AND payment_status = 'cash' THEN article_amount - delivery_fee
                         WHEN status = 'delivered' AND payment_status = 'paid_to_supplier' THEN -delivery_fee
                         WHEN status = 'failed_delivery' THEN amount_received - delivery_fee
                         ELSE 0
                     END
-                ) AS total_orders_payout
+                ), 0) AS orders_payout_amount
             FROM orders
-            GROUP BY shop_id
-        ) AS payouts ON s.id = payouts.shop_id
-        LEFT JOIN (
-            -- Calcule la somme de TOUTES les dettes EN ATTENTE
-            SELECT shop_id, SUM(amount) AS total_pending_debt
-            FROM debts
-            WHERE status = 'pending'
-            GROUP BY shop_id
-        ) AS debts ON s.id = debts.shop_id
-        LEFT JOIN (
-            -- Calcule la somme de TOUS les versements déjà effectués
-            SELECT shop_id, SUM(amount) AS total_remitted
-            FROM remittances
-            GROUP BY shop_id
-        ) AS remittances ON s.id = remittances.shop_id
-        WHERE ${whereClauses.join(' AND ')}
-        ORDER BY s.name ASC
-    `;
-
-    const [shops] = await dbConnection.execute(query, params);
-
-    let allRemittances = shops.map(shop => {
-        const totalOrdersPayout = parseFloat(shop.total_orders_payout);
-        const totalPendingDebt = parseFloat(shop.total_pending_debt);
-        const totalRemitted = parseFloat(shop.total_remitted);
-        
-        const amountToRemit = totalOrdersPayout - totalPendingDebt - totalRemitted;
-
-        let shopStatus;
-        if (amountToRemit < 1) {
-            shopStatus = 'paid';
-        } else if (totalRemitted > 0) {
-            shopStatus = 'partially_paid';
-        } else {
-            shopStatus = 'pending';
-        }
-
-        return {
-            ...shop,
-            total_payout_amount: amountToRemit,
-            status: shopStatus
-        };
-    });
-
-    // Filtre final basé sur le statut calculé et la date
-    let filteredRemittances = allRemittances.filter(r => r.total_payout_amount > 0.01);
-
-    if (status) {
-        filteredRemittances = filteredRemittances.filter(r => r.status === status);
-    }
-    
-    if (startDate && endDate) {
-        const dateParams = [moment(startDate).startOf('day').format('YYYY-MM-DD HH:mm:ss'), moment(endDate).endOf('day').format('YYYY-MM-DD HH:mm:ss')];
-        const [activeShops] = await dbConnection.execute(`SELECT DISTINCT shop_id FROM orders WHERE DATE(created_at) BETWEEN ? AND ?`, dateParams);
-        const activeShopIds = activeShops.map(s => s.shop_id);
-        filteredRemittances = filteredRemittances.filter(r => activeShopIds.includes(r.shop_id));
-    }
-    
-    return filteredRemittances;
-};
-
-const getShopDetails = async (req, res) => {
-    try {
-        const shopId = req.params.shopId || req; // Gère les deux types d'appel
-        const connection = await dbConnection.getConnection();
-        const [remittances] = await connection.execute(
-            'SELECT * FROM remittances WHERE shop_id = ? ORDER BY payment_date DESC',
-            [shopId]
+            WHERE shop_id = ? AND (status IN ('delivered', 'failed_delivery'))
+             `,
+             [shopId]
         );
-        const [debts] = await connection.execute(
-            'SELECT * FROM debts WHERE shop_id = ? AND status = "pending" ORDER BY created_at DESC',
-            [shopId]
-        );
-        // ... (le reste de la logique de cette fonction si nécessaire)
+        const ordersPayoutAmount = ordersPayout[0].orders_payout_amount || 0;
+
+        const totalDebt = debts.reduce((sum, debt) => sum + parseFloat(debt.amount), 0);
+        const totalRemitted = remittances.reduce((sum, rem) => sum + parseFloat(rem.amount), 0);
+        const currentBalance = ordersPayoutAmount - totalDebt - totalRemitted;
+
+        return { remittances, debts, currentBalance };
+    } finally {
         connection.release();
-        // Pour être complet, il faudrait aussi recalculer le solde ici.
-        res.json({ remittances, debts, currentBalance: 0 }); // Placeholder
-    } catch (error) {
-        if(res) res.status(500).json({ message: "Erreur serveur" });
     }
 };
 
-const updateShopPaymentDetails = async (req, res) => {
-    try {
-        const shopId = req.params.shopId || req;
-        const paymentData = req.body || res;
-        const { payment_name, phone_number_for_payment, payment_operator } = paymentData;
-        const query = 'UPDATE shops SET payment_name = ?, phone_number_for_payment = ?, payment_operator = ? WHERE id = ?';
-        const [result] = await dbConnection.execute(query, [payment_name, phone_number_for_payment, payment_operator, shopId]);
-        if(res) res.json({ message: "Détails mis à jour." });
-        return result;
-    } catch(error){
-        if(res) res.status(500).json({ message: "Erreur serveur" });
-    }
+const updateShopPaymentDetails = async (shopId, paymentData) => {
+    const { payment_name, phone_number_for_payment, payment_operator } = paymentData;
+    const query = 'UPDATE shops SET payment_name = ?, phone_number_for_payment = ?, payment_operator = ? WHERE id = ?';
+    const [result] = await dbConnection.execute(query, [payment_name, phone_number_for_payment, payment_operator, shopId]);
+    return result;
 };
 
+const recordRemittance = async (shopId, amount, paymentOperator, status, transactionId = null, comment = null, userId) => {
+    const query = 'INSERT INTO remittances (shop_id, amount, payment_date, payment_operator, status, transaction_id, comment, user_id) VALUES (?, ?, CURDATE(), ?, ?, ?, ?, ?)';
+    const [result] = await dbConnection.execute(query, [shopId, amount, paymentOperator, status, transactionId, comment, userId]);
+    
+    if (status === 'paid') {
+        await dbConnection.execute('UPDATE debts SET status = "paid" WHERE shop_id = ? AND status = "pending"', [shopId]);
+    }
+
+    return result;
+};
 
 module.exports = {
     init,
     findForRemittance,
     getShopDetails,
-    updateShopPaymentDetails
+    updateShopPaymentDetails,
+    recordRemittance,
 };
