@@ -62,8 +62,15 @@ const recordRemittance = async (shopId, amount, paymentOperator, status, transac
         const remittanceQuery = 'INSERT INTO remittances (shop_id, amount, payment_date, payment_operator, status, transaction_id, comment, user_id) VALUES (?, ?, CURDATE(), ?, ?, ?, ?, ?)';
         const [result] = await connection.execute(remittanceQuery, [shopId, amount, paymentOperator, status, transactionId, comment, userId]);
         
-        if (status === 'paid') {
+        if (status === 'paid') { 
+            // Si le paiement est complet, on règle toutes les dettes en attente.
             await connection.execute('UPDATE debts SET status = "paid" WHERE shop_id = ? AND status = "pending"', [shopId]);
+        } else if (status === 'partially_paid') {
+            // Si le paiement est partiel, on crée une créance négative (un crédit) pour réduire le solde.
+            const creditComment = `Crédit suite à un versement partiel de ${amount.toLocaleString('fr-FR')} FCFA`;
+            const creditQuery = 'INSERT INTO debts (shop_id, amount, type, status, comment, created_by) VALUES (?, ?, ?, ?, ?, ?)';
+            // On insère un montant négatif pour qu'il vienne en déduction
+            await connection.execute(creditQuery, [shopId, -Math.abs(amount), 'other', 'paid', creditComment, userId]);
         }
 
         await connection.commit();
