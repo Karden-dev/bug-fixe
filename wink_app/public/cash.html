@@ -42,6 +42,24 @@
         .btn-corail:hover { background-color: #FF6347; border-color: #FF6347; }
         .transaction-amount-positive { color: #28a745; font-weight: bold; }
         .transaction-amount-negative { color: #dc3545; font-weight: bold; }
+        .search-results {
+            position: absolute;
+            z-index: 10;
+            width: 100%;
+            background: white;
+            border: 1px solid #ced4da;
+            border-top: none;
+            max-height: 200px;
+            overflow-y: auto;
+            border-radius: 0 0 5px 5px;
+        }
+        .search-results div {
+            padding: 8px 12px;
+            cursor: pointer;
+        }
+        .search-results div:hover {
+            background-color: #f0f0f0;
+        }
     </style>
 </head>
 <body>
@@ -175,7 +193,15 @@
             <div class="modal-header"><h5 class="modal-title">Saisir une dépense</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
             <form id="expenseForm">
                 <div class="modal-body">
-                    <div class="mb-3"><label for="expenseUserSelect" class="form-label">Utilisateur concerné</label><select class="form-select" id="expenseUserSelect" required></select></div>
+                    <div class="mb-3">
+                        <label for="expenseUserSearch" class="form-label">Utilisateur concerné</label>
+                        <div class="search-container">
+                            <input type="text" class="form-control" id="expenseUserSearch" placeholder="Rechercher un utilisateur..." required>
+                            <div id="expenseUserSearchResults" class="search-results d-none"></div>
+                        </div>
+                        <input type="hidden" id="expenseUserId" name="expenseUserId">
+                    </div>
+                    <div class="mb-3"><label for="expenseDateInput" class="form-label">Date</label><input type="date" class="form-control" id="expenseDateInput" required></div>
                     <div class="mb-3"><label for="expenseCategorySelect" class="form-label">Catégorie</label><select class="form-select" id="expenseCategorySelect" required></select></div>
                     <div class="mb-3"><label for="expenseAmountInput" class="form-label">Montant</label><input type="number" class="form-control" id="expenseAmountInput" required min="1"></div>
                     <div class="mb-3"><label for="expenseCommentInput" class="form-label">Commentaire</label><textarea class="form-control" id="expenseCommentInput" rows="3"></textarea></div>
@@ -203,6 +229,7 @@
             <form id="withdrawalForm">
                 <div class="modal-body">
                     <div class="mb-3"><label for="withdrawalAmountInput" class="form-label">Montant à décaisser</label><input type="number" class="form-control" id="withdrawalAmountInput" required min="1"></div>
+                    <div class="mb-3"><label for="withdrawalDateInput" class="form-label">Date</label><input type="date" class="form-control" id="withdrawalDateInput" required></div>
                     <div class="mb-3"><label for="withdrawalCommentInput" class="form-label">Commentaire</label><textarea class="form-control" id="withdrawalCommentInput" rows="3" placeholder="Ex: Retrait pour dépôt banque"></textarea></div>
                 </div>
                 <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button><button type="submit" class="btn btn-corail">Confirmer</button></div>
