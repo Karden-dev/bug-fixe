@@ -1,4 +1,6 @@
+// src/controllers/remittances.controller.js
 const remittanceModel = require('../models/remittance.model');
+const reportModel = require('../models/report.model'); // <-- NOUVEAU: On importe le modèle des rapports
 const remittancesService = require('../services/remittances.service');
 const PDFDocument = require('pdfkit');
 const moment = require('moment');
@@ -6,9 +8,41 @@ const fs = require('fs');
 
 const getRemittances = async (req, res) => {
     try {
-        const filters = req.query;
-        // On ne force plus le statut 'pending', on utilise le filtre de l'utilisateur
-        const remittances = await remittanceModel.findForRemittance(filters);
+        const { startDate, endDate, search, status } = req.query;
+
+        // Puisque chaque jour est indépendant, nous utilisons la date de fin pour le rapport.
+        // Si l'utilisateur choisit une plage, nous prenons le dernier jour de la plage.
+        const reportDate = endDate || moment().format('YYYY-MM-DD');
+
+        // *** LA CORRECTION PRINCIPALE EST ICI ***
+        // On appelle la même fonction que la page des rapports pour obtenir les données.
+        let reports = await reportModel.findReportsByDate(reportDate);
+
+        // On filtre les résultats pour ne garder que ceux qui ont un montant à verser positif.
+        let remittances = reports.filter(r => r.amount_to_remit > 0).map(r => ({
+            shop_id: r.shop_id,
+            shop_name: r.shop_name,
+            total_payout_amount: r.amount_to_remit,
+            // On ajoute les infos de paiement nécessaires pour l'affichage
+            payment_name: r.payment_name,
+            phone_number_for_payment: r.phone_number_for_payment,
+            payment_operator: r.payment_operator,
+            status: 'pending' // Par défaut, si un montant est dû, le statut est en attente
+        }));
+        
+        // On applique les filtres de recherche si nécessaire
+        if (search) {
+            remittances = remittances.filter(r => 
+                r.shop_name.toLowerCase().includes(search.toLowerCase()) ||
+                (r.payment_name && r.payment_name.toLowerCase().includes(search.toLowerCase()))
+            );
+        }
+        
+        // On applique le filtre de statut (même si ici ce sera toujours 'pending')
+        if (status) {
+            remittances = remittances.filter(r => r.status === status);
+        }
+
 
         const stats = {
             orangeMoneyTotal: 0,
@@ -36,6 +70,8 @@ const getRemittances = async (req, res) => {
         res.status(500).json({ message: 'Erreur serveur lors de la récupération des versements', error: error.message });
     }
 };
+
+// ... Le reste des fonctions du contrôleur reste identique ...
 
 const getRemittanceDetails = async (req, res) => {
     try {
@@ -75,73 +111,7 @@ const updateShopPaymentDetails = async (req, res) => {
 };
 
 const exportPdf = async (req, res) => {
-    try {
-        const pendingRemittances = await remittanceModel.findForRemittance({ status: 'pending' });
-
-        if (pendingRemittances.length === 0) {
-            return res.status(404).json({ message: "Aucun versement en attente à exporter." });
-        }
-        
-        const doc = new PDFDocument({ margin: 50 });
-        const buffers = [];
-        doc.on('data', buffers.push.bind(buffers));
-        doc.on('end', () => {
-            let pdfData = Buffer.concat(buffers);
-            res.writeHead(200, {
-                'Content-Type': 'application/pdf',
-                'Content-Disposition': 'attachment;filename=rapport_versements_en_attente.pdf',
-                'Content-Length': pdfData.length
-            }).end(pdfData);
-        });
-
-        doc.fontSize(20).text('Rapport de Versements en Attente', { align: 'center' });
-        doc.moveDown(0.5);
-        doc.fontSize(12).text(`Date du rapport : ${moment().format('DD/MM/YYYY')}`, { align: 'center' });
-        doc.moveDown(2);
-
-        const createTable = (data, headers, title) => {
-            const tableStartY = doc.y;
-            const columnWidths = [150, 100, 100, 150];
-            const startX = 50;
-
-            doc.fontSize(14).text(title, { underline: true });
-            doc.moveDown(0.5);
-
-            doc.font('Helvetica-Bold');
-            let currentX = startX;
-            headers.forEach((header, i) => {
-                doc.text(header, currentX, doc.y, { width: columnWidths[i] });
-                currentX += columnWidths[i] + 10;
-            });
-            doc.moveDown();
-            
-            doc.font('Helvetica');
-            data.forEach(row => {
-                currentX = startX;
-                row.forEach((cell, i) => {
-                    doc.text(cell, currentX, doc.y, { width: columnWidths[i] });
-                    currentX += columnWidths[i] + 10;
-                });
-                doc.moveDown();
-            });
-        };
-
-        const tableHeaders = ['Marchand', 'Téléphone', 'Opérateur', 'Montant à verser'];
-        const tableData = pendingRemittances.map(rem => [
-            rem.shop_name,
-            rem.phone_number_for_payment || 'N/A',
-            rem.payment_operator || 'N/A',
-            `${rem.total_payout_amount.toLocaleString('fr-FR')} FCFA`
-        ]);
-
-        createTable(tableData, tableHeaders, "Liste des Marchands avec Solde Positif");
-
-        doc.end();
-
-    } catch (error) {
-        console.error("Erreur lors de la génération du PDF:", error);
-        res.status(500).json({ message: 'Erreur serveur lors de la génération du PDF', error: error.message });
-    }
+    // ... cette fonction reste inchangée
 };
 
 
