@@ -8,14 +8,15 @@ const init = (connection) => {
 
 // --- CRUD DE BASE POUR TRANSACTIONS ---
 const create = async (transactionData) => {
-    const { user_id, type, category_id, amount, comment } = transactionData;
+    const { user_id, type, category_id, amount, comment, created_at } = transactionData;
     const query = `
         INSERT INTO cash_transactions (user_id, type, category_id, amount, comment, status, created_at, validated_by) 
-        VALUES (?, ?, ?, ?, ?, ?, NOW(), ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `;
     const status = type === 'remittance' ? 'pending' : 'confirmed';
     const validatedBy = type === 'remittance' ? null : user_id;
-    const [result] = await dbConnection.execute(query, [user_id, type, category_id, amount, comment, status, validatedBy]);
+    const createdAt = created_at ? moment(created_at).format('YYYY-MM-DD HH:mm:ss') : moment().format('YYYY-MM-DD HH:mm:ss');
+    const [result] = await dbConnection.execute(query, [user_id, type, category_id, amount, comment, status, createdAt, validatedBy]);
     return result.insertId;
 };
 
