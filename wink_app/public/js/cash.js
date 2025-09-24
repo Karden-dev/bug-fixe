@@ -2,7 +2,7 @@
 document.addEventListener('DOMContentLoaded', () => {
 
     // --- CONFIGURATION ---
-    const API_BASE_URL = 'https://test.winkexpress.online';
+    const API_BASE_URL = 'https://app.winkexpress.online';
     const storedUser = localStorage.getItem('user') || sessionStorage.getItem('user');
     if (!storedUser) {
         window.location.href = 'index.html';
@@ -37,15 +37,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const withdrawalsTableBody = document.getElementById('withdrawalsTableBody');
     const closingsHistoryTableBody = document.getElementById('closingsHistoryTableBody');
 
-    const remittanceDetailsModal = new bootstrap.Modal(document.getElementById('remittanceDetailsModal'));
-    const closingManagerModal = new bootstrap.Modal(document.getElementById('closingManagerModal'));
     const addExpenseModal = new bootstrap.Modal(document.getElementById('addExpenseModal'));
     const manualWithdrawalModal = new bootstrap.Modal(document.getElementById('manualWithdrawalModal'));
+    const remittanceDetailsModal = new bootstrap.Modal(document.getElementById('remittanceDetailsModal'));
+    const closingManagerModal = new bootstrap.Modal(document.getElementById('closingManagerModal'));
     const editExpenseModal = new bootstrap.Modal(document.getElementById('editExpenseModal'));
     const editWithdrawalModal = new bootstrap.Modal(document.getElementById('editWithdrawalModal'));
 
     const expenseForm = document.getElementById('expenseForm');
+    const expenseDateInput = document.getElementById('expenseDateInput');
+    const expenseUserSearchInput = document.getElementById('expenseUserSearch');
+    const expenseUserSearchResults = document.getElementById('expenseUserSearchResults');
+    const expenseUserIdInput = document.getElementById('expenseUserId');
     const withdrawalForm = document.getElementById('withdrawalForm');
+    const withdrawalDateInput = document.getElementById('withdrawalDateInput');
     const editExpenseForm = document.getElementById('editExpenseForm');
     const editWithdrawalForm = document.getElementById('editWithdrawalForm');
     const closeCashForm = document.getElementById('closeCashForm');
@@ -240,10 +245,6 @@ document.addEventListener('DOMContentLoaded', () => {
             usersCache = usersRes.data;
             categoriesCache = categoriesRes.data;
             
-            const expenseUserSelect = document.getElementById('expenseUserSelect');
-            expenseUserSelect.innerHTML = '<option value="">Sélectionner un utilisateur</option>';
-            usersCache.forEach(u => expenseUserSelect.innerHTML += `<option value="${u.id}">${u.name}</option>`);
-
             const expenseCategorySelect = document.getElementById('expenseCategorySelect');
             expenseCategorySelect.innerHTML = '<option value="">Sélectionner une catégorie</option>';
             categoriesCache.forEach(cat => expenseCategorySelect.innerHTML += `<option value="${cat.id}">${cat.name}</option>`);
@@ -283,7 +284,8 @@ document.addEventListener('DOMContentLoaded', () => {
             e.preventDefault();
             try {
                 await axios.post(`${API_BASE_URL}/cash/expense`, {
-                    user_id: document.getElementById('expenseUserSelect').value,
+                    user_id: expenseUserIdInput.value,
+                    created_at: expenseDateInput.value,
                     category_id: document.getElementById('expenseCategorySelect').value,
                     amount: document.getElementById('expenseAmountInput').value,
                     comment: document.getElementById('expenseCommentInput').value
@@ -291,6 +293,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 showNotification("Dépense enregistrée.");
                 addExpenseModal.hide();
                 expenseForm.reset();
+                resetModalForms();
                 applyFiltersAndRender();
             } catch (error) { showNotification(error.response?.data?.message || "Erreur.", "danger"); }
         });
@@ -300,12 +303,14 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 await axios.post(`${API_BASE_URL}/cash/withdrawal`, {
                     amount: document.getElementById('withdrawalAmountInput').value,
+                    created_at: withdrawalDateInput.value,
                     comment: document.getElementById('withdrawalCommentInput').value,
                     user_id: CURRENT_USER_ID
                 });
                 showNotification("Décaissement enregistré.");
                 manualWithdrawalModal.hide();
                 withdrawalForm.reset();
+                resetModalForms();
                 applyFiltersAndRender();
             } catch (error) { showNotification(error.response?.data?.message || "Erreur.", "danger"); }
         });
@@ -450,7 +455,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (target.matches('.confirm-single-remittance-btn')) {
                 const txId = target.dataset.id;
                 const expectedAmount = target.dataset.amount;
-                const paidAmount = prompt(`Montant attendu : ${formatAmount(expectedAmount)}. Montant versé ?`, expectedAmount);
+                const paidAmount = prompt(`Total sélectionné : ${formatAmount(expectedAmount)}. Montant total versé ?`, expectedAmount);
+
                 if (paidAmount !== null && !isNaN(paidAmount)) {
                     try {
                         const res = await axios.put(`${API_BASE_URL}/cash/remittances/confirm`, { transactionIds: [txId], paidAmount: parseFloat(paidAmount), validated_by: CURRENT_USER_ID });
@@ -484,6 +490,57 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
         }
+        
+        const resetModalForms = () => {
+            const today = new Date().toISOString().slice(0, 10);
+            expenseDateInput.value = today;
+            withdrawalDateInput.value = today;
+        };
+        
+        document.getElementById('addExpenseModal').addEventListener('show.bs.modal', resetModalForms);
+        document.getElementById('manualWithdrawalModal').addEventListener('show.bs.modal', resetModalForms);
+        
+        expenseUserSearchInput.addEventListener('input', () => {
+            const searchTerm = expenseUserSearchInput.value.toLowerCase();
+            expenseUserSearchResults.innerHTML = '';
+            if (searchTerm.length > 1) {
+                const filteredUsers = usersCache.filter(user => user.name.toLowerCase().includes(searchTerm));
+                if (filteredUsers.length > 0) {
+                    filteredUsers.forEach(user => {
+                        const div = document.createElement('div');
+                        div.className = 'p-2';
+                        div.textContent = user.name;
+                        div.dataset.id = user.id;
+                        div.addEventListener('click', () => {
+                            expenseUserSearchInput.value = user.name;
+                            expenseUserIdInput.value = user.id;
+                            expenseUserSearchResults.classList.add('d-none');
+                        });
+                        expenseUserSearchResults.appendChild(div);
+                    });
+                    expenseUserSearchResults.classList.remove('d-none');
+                } else {
+                    expenseUserSearchResults.innerHTML = '<div class="p-2 text-muted">Aucun résultat.</div>';
+                    expenseUserSearchResults.classList.remove('d-none');
+                }
+            } else {
+                expenseUserSearchResults.classList.add('d-none');
+            }
+        });
+        
+        expenseUserSearchResults.addEventListener('click', (e) => {
+            if (e.target.dataset.id) {
+                expenseUserSearchInput.value = e.target.textContent;
+                expenseUserIdInput.value = e.target.dataset.id;
+                expenseUserSearchResults.classList.add('d-none');
+            }
+        });
+        
+        document.getElementById('addExpenseModal').addEventListener('hidden.bs.modal', () => {
+            expenseUserSearchResults.classList.add('d-none');
+            expenseForm.reset();
+            resetModalForms();
+        });
     };
     
     // --- Lancement de la page ---
