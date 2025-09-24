@@ -1,270 +1,154 @@
-// js/reports.js
-document.addEventListener('DOMContentLoaded', async () => {
-    const API_BASE_URL = 'https://app.winkexpress.online';
+// src/models/remittance.model.js
+const moment = require('moment');
 
-    // --- Références DOM ---
-    const reportDateInput = document.getElementById('reportDate');
-    const searchMerchantInput = document.getElementById('searchMerchantInput');
-    const reportsTableBody = document.getElementById('reportsTableBody');
-    const totalRemittanceAmount = document.getElementById('totalRemittanceAmount');
-    const totalPackagingAmount = document.getElementById('totalPackagingAmount');
-    const totalStorageAmount = document.getElementById('totalStorageAmount');
-    const totalDebtAmount = document.getElementById('totalDebtAmount');
-    const totalActiveMerchants = document.getElementById('totalActiveMerchants');
-    const itemsPerPageSelect = document.getElementById('itemsPerPage');
-    const paginationInfo = document.getElementById('paginationInfo');
-    const firstPageBtn = document.getElementById('firstPage');
-    const prevPageBtn = document.getElementById('prevPage');
-    const currentPageDisplay = document.getElementById('currentPageDisplay');
-    const nextPageBtn = document.getElementById('nextPage');
-    const lastPageBtn = document.getElementById('lastPage');
-    const sidebarToggler = document.getElementById('sidebar-toggler');
-    const sidebar = document.getElementById('sidebar');
-    const mainContent = document.getElementById('main-content');
-    const logoutBtn = document.getElementById('logoutBtn');
-    const processStorageBtn = document.getElementById('processStorageBtn');
-    const consolidationDateInput = document.getElementById('consolidationDate');
-    const consolidateBtn = document.getElementById('consolidateBtn');
+let dbConnection;
 
-    // --- Caches de données et état ---
-    let allReports = [];
-    let filteredReports = [];
-    let currentPage = 1;
-    let itemsPerPage = 10;
+const init = (connection) => {
+    dbConnection = connection;
+};
 
-    // --- Fonctions utilitaires ---
-    const showNotification = (message, type = 'success') => {
-        const container = document.getElementById('notification-container');
-        if (!container) return;
-        const alert = document.createElement('div');
-        alert.className = `alert alert-${type} alert-dismissible fade show`;
-        alert.role = 'alert';
-        alert.innerHTML = `${message}<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>`;
-        container.appendChild(alert);
-        setTimeout(() => alert.remove(), 5000);
-    };
-
-    const formatAmount = (amount) => `${parseFloat(amount || 0).toLocaleString('fr-FR')} FCFA`;
+const findForRemittance = async (filters = {}) => {
+    const { search, startDate, endDate, status } = filters;
     
-    const showLoading = (element) => {
-        element.innerHTML = '<tr><td colspan="8" class="text-center p-4"><div class="spinner-border text-corail" role="status"><span class="visually-hidden">Chargement...</span></div></td></tr>';
-    };
+    // Si aucune date n'est fournie, on ne peut pas calculer un solde cohérent avec les rapports.
+    if (!startDate || !endDate) {
+        return [];
+    }
+    
+    const params = [
+        startDate, endDate, // Pour les gains et frais de la période
+        startDate, // Pour les créances antérieures
+        startDate, endDate // Pour le filtrage des boutiques actives sur la période
+    ];
 
-    const fetchReports = async (date) => {
-        if (!date) {
-            reportsTableBody.innerHTML = '<tr><td colspan="8" class="text-center">Veuillez sélectionner une date pour afficher les rapports.</td></tr>';
-            updateGlobalTotals([]);
-            return;
-        }
-        try {
-            showLoading(reportsTableBody);
-            const res = await axios.get(`${API_BASE_URL}/reports`, { params: { date } });
-            allReports = res.data;
-            allReports.sort((a, b) => a.amount_to_remit - b.amount_to_remit);
-            applyFiltersAndRender();
-        } catch (error) {
-            reportsTableBody.innerHTML = '<tr><td colspan="8" class="text-center text-danger">Erreur lors du chargement des rapports.</td></tr>';
-            showNotification("Erreur lors du chargement des rapports.", 'danger');
-        }
-    };
-
-    const applyFiltersAndRender = () => {
-        const searchTerm = searchMerchantInput.value.toLowerCase();
-        filteredReports = allReports.filter(report => report.shop_name.toLowerCase().includes(searchTerm));
-        currentPage = 1;
-        renderReportsTable(filteredReports);
-        updatePaginationInfo(filteredReports.length);
-        updateGlobalTotals(allReports);
-    };
-
-    const renderReportsTable = (reports) => {
-        reportsTableBody.innerHTML = '';
-        if (reports.length === 0) {
-            reportsTableBody.innerHTML = '<tr><td colspan="8" class="text-center">Aucun rapport trouvé pour les filtres actuels.</td></tr>';
-            return;
-        }
-        const startIndex = (currentPage - 1) * itemsPerPage;
-        const endIndex = startIndex + itemsPerPage;
-        const reportsToRender = reports.slice(startIndex, endIndex);
-        reportsToRender.forEach((report, index) => {
-            const row = document.createElement('tr');
-            const rank = startIndex + index + 1;
-            const amountToRemitClass = report.amount_to_remit < 0 ? 'text-danger fw-bold' : 'text-success fw-bold';
-            row.innerHTML = `<td>${rank}. ${report.shop_name}</td><td>${report.total_orders_sent}</td><td>${report.total_orders_delivered}</td><td>${formatAmount(report.total_revenue_articles)}</td><td>${formatAmount(report.total_delivery_fees)}</td><td>${formatAmount(report.previous_debts)}</td><td class="${amountToRemitClass}">${formatAmount(report.amount_to_remit)}</td><td><button class="btn btn-sm btn-info copy-report-btn" data-shop-id="${report.shop_id}" title="Copier le rapport détaillé"><i class="bi bi-clipboard"></i></button></td>`;
-            reportsTableBody.appendChild(row);
-        });
-    };
-
-    const updateGlobalTotals = (reports) => {
-        let totalRemit = 0, totalDebt = 0, totalPackaging = 0, totalStorage = 0, activeMerchantsCount = 0;
-        reports.forEach(report => {
-            if (report.total_orders_sent > 0) activeMerchantsCount++;
-            totalPackaging += parseFloat(report.total_packaging_fees);
-            totalStorage += parseFloat(report.total_storage_fees);
-            totalDebt += parseFloat(report.previous_debts);
-            if (report.amount_to_remit >= 0) totalRemit += parseFloat(report.amount_to_remit);
-        });
-        totalActiveMerchants.textContent = activeMerchantsCount;
-        totalRemittanceAmount.textContent = formatAmount(totalRemit);
-        totalDebtAmount.textContent = formatAmount(totalDebt);
-        totalPackagingAmount.textContent = formatAmount(totalPackaging);
-        totalStorageAmount.textContent = formatAmount(totalStorage);
-    };
-
-    const updatePaginationControls = () => {
-        const totalPages = Math.ceil(filteredReports.length / itemsPerPage);
-        currentPageDisplay.textContent = currentPage;
-        firstPageBtn.classList.toggle('disabled', currentPage === 1);
-        prevPageBtn.classList.toggle('disabled', currentPage === 1);
-        nextPageBtn.classList.toggle('disabled', currentPage === totalPages || totalPages === 0);
-        lastPageBtn.classList.toggle('disabled', currentPage === totalPages || totalPages === 0);
-    };
-
-    const updatePaginationInfo = (totalItems) => {
-        const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
-        if (paginationInfo) paginationInfo.textContent = `Page ${currentPage} sur ${totalPages} (${totalItems} marchands)`;
-        updatePaginationControls();
-    };
-
-    const handlePageChange = (newPage) => {
-        const totalPages = Math.ceil(filteredReports.length / itemsPerPage);
-        if (newPage < 1 || newPage > totalPages) return;
-        currentPage = newPage;
-        renderReportsTable(filteredReports);
-        updatePaginationInfo(filteredReports.length);
-    };
-
-    firstPageBtn?.addEventListener('click', (e) => { e.preventDefault(); handlePageChange(1); });
-    prevPageBtn?.addEventListener('click', (e) => { e.preventDefault(); handlePageChange(currentPage - 1); });
-    nextPageBtn?.addEventListener('click', (e) => { e.preventDefault(); handlePageChange(currentPage + 1); });
-    lastPageBtn?.addEventListener('click', (e) => { e.preventDefault(); handlePageChange(Math.ceil(filteredReports.length / itemsPerPage)); });
-    itemsPerPageSelect?.addEventListener('change', (e) => { itemsPerPage = parseInt(e.target.value); applyFiltersAndRender(); });
-    reportDateInput?.addEventListener('change', () => fetchReports(reportDateInput.value));
-    searchMerchantInput?.addEventListener('input', applyFiltersAndRender);
-
-    reportsTableBody?.addEventListener('click', async (e) => {
-        const button = e.target.closest('.copy-report-btn');
-        if (button) {
-            const shopId = button.dataset.shopId;
-            const reportDate = reportDateInput.value;
-            if (!reportDate || !shopId) return showNotification('Impossible de générer le rapport sans date ou marchand.', 'warning');
-            button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
-            button.disabled = true;
-            try {
-                const res = await axios.get(`${API_BASE_URL}/reports/detailed`, { params: { date: reportDate, shopId } });
-                const reportDetails = res.data;
-                const formattedDate = new Date(reportDate).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-                
-                let reportContent = `*Rapport du :* ${formattedDate}\n`;
-                reportContent += `*Magasin :* ${reportDetails.shop_name}\n\n`;
-                reportContent += `*--- DETAIL DES LIVRAISONS ---*\n\n`;
-
-                if (reportDetails.orders && reportDetails.orders.length > 0) {
-                    reportDetails.orders.forEach((order, index) => {
-                        const productsList = order.products_list || 'Produit non spécifié';
-                        const clientPhoneFormatted = order.customer_phone ? order.customer_phone.substring(0, 6) + '***' : 'N/A';
-                        reportContent += `*${index + 1})* Produit(s) : ${productsList}\n`;
-                        reportContent += `   Quartier : ${order.delivery_location}\n`;
-                        reportContent += `   Client : ${clientPhoneFormatted}\n`;
-                        const amountToDisplay = order.status === 'failed_delivery' ? parseFloat(order.amount_received || 0) : order.article_amount;
-                        reportContent += `   Montant perçu : ${formatAmount(amountToDisplay)}\n`;
-                        reportContent += `   Frais de livraison : ${formatAmount(order.delivery_fee)}\n`;
-                        if (order.status === 'failed_delivery') {
-                           reportContent += `   *Statut :* Livraison ratée\n`;
-                        }
-                        reportContent += "\n";
-                    });
-                } else {
-                    reportContent += "Aucune livraison enregistrée pour cette journée.\n\n";
-                }
-
-                reportContent += `*--- RÉSUMÉ FINANCIER ---*\n`;
-                reportContent += `*Total encaissement (Cash/Raté) :* ${formatAmount(reportDetails.total_revenue_articles)}\n`;
-                reportContent += `*Total Frais de livraison :* ${formatAmount(reportDetails.total_delivery_fees)}\n`;
-                reportContent += `*Total Frais d'emballage :* ${formatAmount(reportDetails.total_packaging_fees)}\n`;
-                reportContent += `*Créances antérieures :* ${formatAmount(reportDetails.previous_debts)}\n`;
-                reportContent += `*Frais de stockage (cumulés) :* ${formatAmount(reportDetails.total_storage_fees)}\n\n`;
-                reportContent += `*MONTANT NET À VERSER :* ${formatAmount(reportDetails.amount_to_remit)}\n`;
-                
-                await navigator.clipboard.writeText(reportContent);
-                showNotification(`Le rapport détaillé pour "${reportDetails.shop_name}" a été copié !`);
-            } catch (error) {
-                console.error("Erreur lors de la génération du rapport détaillé:", error);
-                showNotification('Erreur lors de la génération du rapport détaillé.', 'danger');
-            } finally {
-                button.innerHTML = '<i class="bi bi-clipboard"></i>';
-                button.disabled = false;
-            }
-        }
-    });
-
-    if (processStorageBtn) {
-        processStorageBtn.addEventListener('click', async () => {
-            const date = reportDateInput.value;
-            if (!date) return showNotification('Veuillez sélectionner une date.', 'warning');
-            processStorageBtn.disabled = true;
-            processStorageBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Traitement...';
-            try {
-                const response = await axios.post(`${API_BASE_URL}/reports/process-storage`, { date });
-                showNotification(response.data.message, 'success');
-                fetchReports(date);
-            } catch (error) {
-                showNotification(`Erreur: ${error.response?.data?.message || 'Erreur inconnue.'}`, 'danger');
-            } finally {
-                processStorageBtn.disabled = false;
-                processStorageBtn.innerHTML = '<i class="bi bi-box-seam"></i> Traiter le stockage';
-            }
-        });
+    let searchQuery = '';
+    if (search) {
+        searchQuery = ` AND (s.name LIKE ? OR s.payment_name LIKE ? OR s.phone_number_for_payment LIKE ?)`;
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
 
-    if (consolidateBtn) {
-        consolidateBtn.addEventListener('click', async () => {
-            const date = consolidationDateInput.value;
-            if (!date) return showNotification('Veuillez sélectionner une date à consolider.', 'warning');
-            if (!window.confirm(`Êtes-vous sûr de vouloir consolider les soldes pour le ${date} ?\nCette action est irréversible.`)) return;
-            consolidateBtn.disabled = true;
-            consolidateBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Consolidation...';
-            try {
-                const response = await axios.post(`${API_BASE_URL}/reports/consolidate-balances`, { date });
-                showNotification(response.data.message, 'success');
-                if (date === reportDateInput.value) fetchReports(date);
-            } catch (error) {
-                showNotification(`Erreur: ${error.response?.data?.message || 'Erreur inconnue.'}`, 'danger');
-            } finally {
-                consolidateBtn.disabled = false;
-                consolidateBtn.innerHTML = '<i class="bi bi-gear-wide-connected"></i> Consolider';
-            }
-        });
+    const query = `
+        SELECT
+            s.id AS shop_id,
+            s.name AS shop_name,
+            s.payment_name,
+            s.phone_number_for_payment,
+            s.payment_operator,
+            COALESCE(period_orders.gains, 0) AS orders_payout_amount,
+            COALESCE(period_orders.fees, 0) + COALESCE(previous_debts.total_pending_debts, 0) AS total_debt_amount
+        FROM shops s
+        LEFT JOIN (
+            -- Calcul des gains et frais sur la période sélectionnée
+            SELECT
+                shop_id,
+                SUM(CASE WHEN orders.status = 'delivered' AND orders.payment_status = 'cash' THEN orders.article_amount ELSE 0 END + CASE WHEN orders.status = 'failed_delivery' THEN orders.amount_received ELSE 0 END) as gains,
+                SUM(CASE WHEN orders.status IN ('delivered', 'failed_delivery') THEN orders.delivery_fee ELSE 0 END) + SUM(IF(s_inner.bill_packaging, s_inner.packaging_price, 0)) as fees
+            FROM orders
+            JOIN shops s_inner ON orders.shop_id = s_inner.id
+            WHERE DATE(orders.created_at) BETWEEN ? AND ?
+            GROUP BY shop_id
+        ) AS period_orders ON s.id = period_orders.shop_id
+        LEFT JOIN (
+            -- Calcul des dettes (y compris stockage) accumulées AVANT la période
+            SELECT shop_id, SUM(amount) AS total_pending_debts
+            FROM debts
+            WHERE status = 'pending' AND DATE(created_at) < ?
+            GROUP BY shop_id
+        ) AS previous_debts ON s.id = previous_debts.shop_id
+        WHERE s.status = 'actif'
+        AND s.id IN (
+            -- On affiche seulement les marchands ayant eu une activité (commande ou dette) sur la période
+            SELECT DISTINCT shop_id FROM orders WHERE DATE(orders.created_at) BETWEEN ? AND ?
+        )
+        ${searchQuery}
+        ORDER BY s.name ASC
+    `;
+
+    const [shops] = await dbConnection.execute(query, params);
+
+    const remittances = shops.map(shop => {
+        const totalGains = parseFloat(shop.orders_payout_amount);
+        const totalDebts = parseFloat(shop.total_debt_amount);
+        const amountToRemit = totalGains - totalDebts;
+
+        return {
+            ...shop,
+            total_payout_amount: amountToRemit,
+            status: amountToRemit > 0 ? 'pending' : 'paid'
+        };
+    }).filter(shop => shop.total_payout_amount > 0.01); // On affiche que les soldes positifs
+    
+    if (status) {
+        return remittances.filter(rem => rem.status === status);
+    }
+    
+    return remittances;
+};
+
+
+const getShopDetails = async (shopId) => {
+    const connection = await dbConnection.getConnection();
+    try {
+        const [remittances] = await connection.execute(
+            'SELECT * FROM remittances WHERE shop_id = ? ORDER BY payment_date DESC',
+            [shopId]
+        );
+
+        const [debts] = await connection.execute(
+            'SELECT * FROM debts WHERE shop_id = ? AND status = "pending" ORDER BY created_at DESC',
+            [shopId]
+        );
+        
+        const [ordersPayout] = await connection.execute(
+             `
+             SELECT
+                COALESCE(SUM(
+                    CASE
+                        WHEN status = 'delivered' AND payment_status = 'cash' THEN article_amount - delivery_fee
+                        WHEN status = 'delivered' AND payment_status = 'paid_to_supplier' THEN -delivery_fee
+                        WHEN status = 'failed_delivery' THEN amount_received - delivery_fee
+                        ELSE 0
+                    END
+                ), 0) AS orders_payout_amount
+            FROM orders
+            WHERE shop_id = ? AND (status IN ('delivered', 'failed_delivery'))
+             `,
+             [shopId]
+        );
+        const ordersPayoutAmount = ordersPayout[0].orders_payout_amount || 0;
+
+        const totalDebt = debts.reduce((sum, debt) => sum + parseFloat(debt.amount), 0);
+        const totalRemitted = remittances.reduce((sum, rem) => sum + parseFloat(rem.amount), 0);
+        const currentBalance = ordersPayoutAmount - totalDebt - totalRemitted;
+
+        return { remittances, debts, currentBalance };
+    } finally {
+        connection.release();
+    }
+};
+
+const updateShopPaymentDetails = async (shopId, paymentData) => {
+    const { payment_name, phone_number_for_payment, payment_operator } = paymentData;
+    const query = 'UPDATE shops SET payment_name = ?, phone_number_for_payment = ?, payment_operator = ? WHERE id = ?';
+    const [result] = await dbConnection.execute(query, [payment_name, phone_number_for_payment, payment_operator, shopId]);
+    return result;
+};
+
+const recordRemittance = async (shopId, amount, paymentOperator, status, transactionId = null, comment = null, userId) => {
+    const query = 'INSERT INTO remittances (shop_id, amount, payment_date, payment_operator, status, transaction_id, comment, user_id) VALUES (?, ?, CURDATE(), ?, ?, ?, ?, ?)';
+    const [result] = await dbConnection.execute(query, [shopId, amount, paymentOperator, status, transactionId, comment, userId]);
+    
+    if (status === 'paid') {
+        await dbConnection.execute('UPDATE debts SET status = "paid" WHERE shop_id = ? AND status = "pending"', [shopId]);
     }
 
-    const initializePage = () => {
-        const today = new Date().toISOString().slice(0, 10);
-        if (reportDateInput) {
-            reportDateInput.value = today;
-            fetchReports(today);
-        }
-        
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayFormatted = yesterday.toISOString().slice(0, 10);
-        if (consolidationDateInput) {
-            consolidationDateInput.value = yesterdayFormatted;
-        }
-        
-        sidebarToggler?.addEventListener('click', () => {
-            sidebar?.classList.toggle('collapsed');
-            mainContent?.classList.toggle('expanded');
-        });
-        
-        logoutBtn?.addEventListener('click', () => { window.location.href = 'index.html'; });
-        
-        const currentPath = window.location.pathname.split('/').pop();
-        document.querySelectorAll('.sidebar .nav-link').forEach(link => {
-            if (link.getAttribute('href') === currentPath) link.classList.add('active');
-        });
-        
-        if (itemsPerPageSelect) itemsPerPage = parseInt(itemsPerPageSelect.value);
-    };
-    
-    initializePage();
-});
+    return result;
+};
+
+module.exports = {
+    init,
+    findForRemittance,
+    getShopDetails,
+    updateShopPaymentDetails,
+    recordRemittance,
+};
