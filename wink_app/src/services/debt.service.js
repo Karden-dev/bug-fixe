@@ -21,14 +21,14 @@ const processStorageFees = async (processingDate) => {
         );
         for (const shop of shopsWithStorage) {
             const [existingDebt] = await connection.execute(
-                `SELECT id FROM debts WHERE shop_id = ? AND type = 'storage_fee' AND DATE(created_at) = ?`,
+                `SELECT id FROM debts WHERE shop_id = ? AND type = 'storage' AND DATE(created_at) = ?`,
                 [shop.id, processingDate]
             );
             if (existingDebt.length === 0) {
                 const comment = `Frais de stockage pour le ${processingDate}`;
                 await connection.execute(
                     'INSERT INTO debts (shop_id, amount, type, status, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-                    [shop.id, shop.storage_price, 'storage_fee', 'pending', comment, processingDate]
+                    [shop.id, shop.storage_price, 'storage', 'pending', comment, processingDate]
                 );
             }
         }
@@ -54,13 +54,13 @@ const consolidateDailyBalances = async (dateToConsolidate) => {
             if (report.amount_to_remit < 0) {
                 const debtAmount = Math.abs(report.amount_to_remit);
                 const [existingDebt] = await connection.execute(
-                    `SELECT id FROM debts WHERE shop_id = ? AND type = 'daily_balance' AND DATE(created_at) = ?`,
+                    `SELECT id FROM debts WHERE shop_id = ? AND type = 'other' AND DATE(created_at) = ? AND comment LIKE 'Report du solde négatif%'`,
                     [report.shop_id, dateToConsolidate]
                 );
                 if (existingDebt.length === 0) {
                     await connection.execute(
                         'INSERT INTO debts (shop_id, amount, type, status, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-                        [report.shop_id, debtAmount, 'daily_balance', 'pending', `Report du solde négatif du ${dateToConsolidate}`, dateToConsolidate]
+                        [report.shop_id, debtAmount, 'other', 'pending', `Report du solde négatif du ${dateToConsolidate}`, dateToConsolidate]
                     );
                 }
             }
