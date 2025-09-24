@@ -1,3 +1,4 @@
+// src/controllers/remittances.controller.js
 const remittanceModel = require('../models/remittance.model');
 const remittancesService = require('../services/remittances.service');
 const PDFDocument = require('pdfkit');
@@ -76,12 +77,13 @@ const updateShopPaymentDetails = async (req, res) => {
 
 const exportPdf = async (req, res) => {
     try {
-        const pendingRemittances = await remittanceModel.findForRemittance({ status: 'pending' });
+        const { startDate, endDate } = req.query;
+        const remittances = await remittanceModel.findForRemittance({ startDate, endDate, status: 'pending' });
 
-        if (pendingRemittances.length === 0) {
+        if (remittances.length === 0) {
             return res.status(404).json({ message: "Aucun versement en attente à exporter." });
         }
-        
+
         const doc = new PDFDocument({ margin: 50 });
         const buffers = [];
         doc.on('data', buffers.push.bind(buffers));
@@ -94,47 +96,90 @@ const exportPdf = async (req, res) => {
             }).end(pdfData);
         });
 
-        doc.fontSize(20).text('Rapport de Versements en Attente', { align: 'center' });
-        doc.moveDown(0.5);
-        doc.fontSize(12).text(`Date du rapport : ${moment().format('DD/MM/YYYY')}`, { align: 'center' });
-        doc.moveDown(2);
+        const headerPath = 'public/header.png';
+        const pageHeight = doc.page.height;
+        const pageWidth = doc.page.width;
 
-        const createTable = (data, headers, title) => {
-            const tableStartY = doc.y;
-            const columnWidths = [150, 100, 100, 150];
-            const startX = 50;
+        const addHeaderAndFooter = () => {
+            if (fs.existsSync(headerPath)) {
+                doc.image(headerPath, 0, 0, { width: pageWidth, height: pageHeight });
+            }
+        };
 
-            doc.fontSize(14).text(title, { underline: true });
+        const drawTable = (data, headers, title) => {
+            const tableTop = doc.y;
+            const itemHeight = 25;
+            const headerHeight = 25;
+            const tableWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+            const columns = [
+                { key: 'shop_name', width: 120, label: 'Marchand' },
+                { key: 'total_payout_amount', width: 90, label: 'Montant à verser' },
+                { key: 'contact', width: 140, label: 'Contact versement' },
+                { key: 'observation', width: 100, label: 'Observation' }
+            ];
+            
+            const tableHeight = headerHeight + (data.length * itemHeight);
+            if (doc.y + tableHeight > doc.page.height - 70) { // 70px de marge en bas
+                doc.addPage();
+            }
+
+            // Titre du tableau
+            doc.fillColor('black').fontSize(14).font('Helvetica-Bold').text(title, doc.x, doc.y);
             doc.moveDown(0.5);
 
-            doc.font('Helvetica-Bold');
-            let currentX = startX;
-            headers.forEach((header, i) => {
-                doc.text(header, currentX, doc.y, { width: columnWidths[i] });
-                currentX += columnWidths[i] + 10;
-            });
-            doc.moveDown();
+            // En-tête du tableau stylisé
+            doc.fillColor('#2C3E50').rect(doc.x, doc.y, tableWidth, headerHeight).fill();
+            doc.fillColor('white').font('Helvetica-Bold').fontSize(9);
             
-            doc.font('Helvetica');
-            data.forEach(row => {
-                currentX = startX;
-                row.forEach((cell, i) => {
-                    doc.text(cell, currentX, doc.y, { width: columnWidths[i] });
-                    currentX += columnWidths[i] + 10;
-                });
-                doc.moveDown();
+            let currentX = doc.x;
+            columns.forEach(col => {
+                doc.text(col.label, currentX, doc.y + 8, { width: col.width, align: 'center' });
+                currentX += col.width + 5;
+            });
+            doc.y += headerHeight;
+            
+            // Lignes du tableau stylisées
+            doc.font('Helvetica').fontSize(9);
+            data.forEach((item, i) => {
+                const isOdd = i % 2 !== 0;
+                doc.fillColor(isOdd ? '#F8F9FA' : 'white').rect(doc.x, doc.y, tableWidth, itemHeight).fill();
+                doc.fillColor('black');
+
+                currentX = doc.x;
+                doc.text(item.shop_name, currentX, doc.y + 8, { width: columns[0].width, align: 'left' });
+                currentX += columns[0].width + 5;
+                doc.text(item.total_payout_amount, currentX, doc.y + 8, { width: columns[1].width, align: 'right' });
+                currentX += columns[1].width + 5;
+                doc.text(item.contact, currentX, doc.y + 8, { width: columns[2].width, align: 'left' });
+                currentX += columns[2].width + 5;
+                doc.text(item.observation, currentX, doc.y + 8, { width: columns[3].width, align: 'left' });
+                doc.y += itemHeight;
             });
         };
 
-        const tableHeaders = ['Marchand', 'Téléphone', 'Opérateur', 'Montant à verser'];
-        const tableData = pendingRemittances.map(rem => [
-            rem.shop_name,
-            rem.phone_number_for_payment || 'N/A',
-            rem.payment_operator || 'N/A',
-            `${rem.total_payout_amount.toLocaleString('fr-FR')} FCFA`
-        ]);
+        // Gérer les pages et ajouter l'en-tête
+        doc.on('pageAdded', () => {
+            addHeaderAndFooter();
+            doc.y = 160; // Position Y de départ pour le contenu sur les nouvelles pages
+        });
+        addHeaderAndFooter(); // Ajout du header sur la première page
 
-        createTable(tableData, tableHeaders, "Liste des Marchands avec Solde Positif");
+        // Contenu du document
+        doc.y = 160; // Position Y de départ pour le contenu
+        doc.fillColor('black').fontSize(18).text('Etat des versements', { align: 'center', continued: false, y: 120 });
+        doc.fontSize(12).text('Récapitulatif de la période', { align: 'center' });
+        const periodText = (startDate && endDate) ? `Du ${moment(startDate).format('DD/MM/YYYY')} au ${moment(endDate).format('DD/MM/YYYY')}` : `Date du rapport : ${moment().format('DD/MM/YYYY')}`;
+        doc.fontSize(10).text(periodText, { align: 'center' });
+        doc.moveDown(2);
+
+        const tableData = remittances.map(rem => ({
+            shop_name: rem.shop_name,
+            total_payout_amount: rem.total_payout_amount ? rem.total_payout_amount.toLocaleString('fr-FR') + ' FCFA' : '0 FCFA',
+            contact: `${rem.payment_name || 'N/A'} (${rem.phone_number_for_payment || 'N/A'}) - ${rem.payment_operator || 'N/A'}`,
+            observation: 'En attente'
+        }));
+
+        drawTable(tableData, [], '');
 
         doc.end();
 
@@ -143,7 +188,6 @@ const exportPdf = async (req, res) => {
         res.status(500).json({ message: 'Erreur serveur lors de la génération du PDF', error: error.message });
     }
 };
-
 
 module.exports = {
     getRemittances,
