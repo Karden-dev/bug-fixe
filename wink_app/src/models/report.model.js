@@ -9,52 +9,67 @@ module.exports = {
     findReportsByDate: async (date) => {
         const connection = await dbConnection.getConnection();
         try {
-            const previousDebtsDate = moment(date).format('YYYY-MM-DD');
             const query = `
                 SELECT
-                    s.id AS shop_id, s.name AS shop_name, s.packaging_price, s.bill_packaging,
+                    s.id AS shop_id,
+                    s.name AS shop_name,
+                    s.packaging_price,
+                    s.bill_packaging,
                     COALESCE(todays_orders.gains_cash, 0) AS total_revenue_articles_cash,
                     COALESCE(todays_orders.gains_failed, 0) AS total_revenue_articles_failed,
                     COALESCE(todays_orders.total_delivery_fees, 0) AS total_delivery_fees,
                     (COALESCE(todays_orders.total_orders_processed, 0) * IF(s.bill_packaging, s.packaging_price, 0)) AS total_packaging_fees,
-                    COALESCE(todays_debts.todays_storage_fees, 0) AS total_storage_fees,
-                    COALESCE(todays_debts.todays_expedition_fees, 0) AS total_expedition_fees,
-                    COALESCE(previous_pending_debts.total_pending_debts, 0) AS previous_debts,
+                    COALESCE(storage_debts.total_storage_fees, 0) AS total_storage_fees,
+                    COALESCE(other_previous_debts.total_pending_debts, 0) AS previous_debts,
                     COALESCE(todays_orders.total_orders_sent, 0) AS total_orders_sent,
                     COALESCE(todays_orders.total_orders_delivered, 0) AS total_orders_delivered
                 FROM shops s
                 LEFT JOIN (
-                    SELECT shop_id, COUNT(id) AS total_orders_sent, SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS total_orders_delivered, SUM(CASE WHEN status IN ('delivered', 'failed_delivery') THEN 1 ELSE 0 END) AS total_orders_processed, SUM(CASE WHEN status = 'delivered' AND payment_status = 'cash' THEN article_amount ELSE 0 END) AS gains_cash, SUM(CASE WHEN status = 'failed_delivery' THEN amount_received ELSE 0 END) AS gains_failed, SUM(CASE WHEN status IN ('delivered', 'failed_delivery') THEN delivery_fee ELSE 0 END) AS total_delivery_fees
-                    FROM orders WHERE DATE(created_at) = ? GROUP BY shop_id
-                ) AS todays_orders ON s.id = todays_orders.shop_id
-                LEFT JOIN (
+                    -- Calcule les gains et frais uniquement pour les commandes du jour sélectionné
                     SELECT
                         shop_id,
-                        SUM(CASE WHEN type = 'storage_fee' THEN amount ELSE 0 END) AS todays_storage_fees,
-                        SUM(CASE WHEN type = 'expedition' THEN amount ELSE 0 END) AS todays_expedition_fees
-                    FROM debts
-                    WHERE DATE(created_at) = ? AND status = 'pending'
+                        COUNT(id) AS total_orders_sent,
+                        SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS total_orders_delivered,
+                        SUM(CASE WHEN status IN ('delivered', 'failed_delivery') THEN 1 ELSE 0 END) AS total_orders_processed,
+                        SUM(CASE WHEN status = 'delivered' AND payment_status = 'cash' THEN article_amount ELSE 0 END) AS gains_cash,
+                        SUM(CASE WHEN status = 'failed_delivery' THEN amount_received ELSE 0 END) AS gains_failed,
+                        SUM(CASE WHEN status IN ('delivered', 'failed_delivery') THEN delivery_fee ELSE 0 END) AS total_delivery_fees
+                    FROM orders WHERE DATE(created_at) = ?
                     GROUP BY shop_id
-                ) AS todays_debts ON s.id = todays_debts.shop_id
+                ) AS todays_orders ON s.id = todays_orders.shop_id
                 LEFT JOIN (
-                    SELECT shop_id, SUM(amount) AS total_pending_debts
-                    FROM debts
-                    WHERE status = 'pending' AND DATE(created_at) < ?
+                    -- Calcule la somme de TOUS les frais de stockage en attente JUSQU'À AUJOURD'HUI INCLUS
+                    SELECT shop_id, SUM(amount) AS total_storage_fees
+                    FROM debts WHERE DATE(created_at) <= ? AND status = 'pending' AND type = 'storage'
                     GROUP BY shop_id
-                ) AS previous_pending_debts ON s.id = previous_pending_debts.shop_id
+                ) AS storage_debts ON s.id = storage_debts.shop_id
+                LEFT JOIN (
+                    -- Calcule la somme de TOUTES les AUTRES créances en attente D'AVANT AUJOURD'HUI
+                    SELECT shop_id, SUM(amount) AS total_pending_debts
+                    FROM debts WHERE status = 'pending' AND DATE(created_at) < ? AND type != 'storage'
+                    GROUP BY shop_id
+                ) AS other_previous_debts ON s.id = other_previous_debts.shop_id
                 WHERE s.status = 'actif';
             `;
-            const [rows] = await connection.execute(query, [date, date, previousDebtsDate]);
+            
+            // Les trois paramètres '?' de la requête correspondent à la même date sélectionnée
+            const [rows] = await connection.execute(query, [date, date, date]);
+            
             return rows.map(row => {
                 const merchantGains = parseFloat(row.total_revenue_articles_cash) + parseFloat(row.total_revenue_articles_failed);
-                const merchantDebts = parseFloat(row.total_delivery_fees) + parseFloat(row.total_packaging_fees) + parseFloat(row.total_storage_fees) + parseFloat(row.total_expedition_fees) + parseFloat(row.previous_debts);
+                const merchantDebts = parseFloat(row.total_delivery_fees) + parseFloat(row.total_packaging_fees) + parseFloat(row.total_storage_fees) + parseFloat(row.previous_debts);
                 const amountToRemit = merchantGains - merchantDebts;
                 return {
-                    shop_id: row.shop_id, shop_name: row.shop_name, total_orders_sent: parseInt(row.total_orders_sent, 10),
-                    total_orders_delivered: parseInt(row.total_orders_delivered, 10), total_revenue_articles: merchantGains,
-                    total_delivery_fees: parseFloat(row.total_delivery_fees), total_packaging_fees: parseFloat(row.total_packaging_fees),
-                    total_storage_fees: parseFloat(row.total_storage_fees), previous_debts: parseFloat(row.previous_debts),
-                    amount_to_remit: amountToRemit
+                    shop_id: row.shop_id,
+                    shop_name: row.shop_name,
+                    total_orders_sent: parseInt(row.total_orders_sent, 10),
+                    total_orders_delivered: parseInt(row.total_orders_delivered, 10),
+                    total_revenue_articles: merchantGains,
+                    total_delivery_fees: parseFloat(row.total_delivery_fees),
+                    total_packaging_fees: parseFloat(row.total_packaging_fees),
+                    total_storage_fees: parseFloat(row.total_storage_fees),
+                    previous_debts: parseFloat(row.previous_debts),
+                    amount_to_remit: amountToRemit,
                 };
             });
         } finally {
