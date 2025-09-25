@@ -17,24 +17,36 @@ module.exports = {
                     COALESCE(todays_orders.gains_failed, 0) AS total_revenue_articles_failed,
                     COALESCE(todays_orders.total_delivery_fees, 0) AS total_delivery_fees,
                     (COALESCE(todays_orders.total_orders_processed, 0) * IF(s.bill_packaging, s.packaging_price, 0)) AS total_packaging_fees,
-                    COALESCE(todays_debts.total_amount, 0) AS total_daily_debts,
+                    COALESCE(todays_debts.storage_fee_today, 0) AS total_storage_fees,
+                    COALESCE(todays_debts.expedition_fee_today, 0) AS total_expedition_fees,
                     COALESCE(previous_debts.total_pending_debts, 0) AS previous_debts,
                     COALESCE(todays_orders.total_orders_sent, 0) AS total_orders_sent,
                     COALESCE(todays_orders.total_orders_delivered, 0) AS total_orders_delivered
                 FROM shops s
                 LEFT JOIN (
-                    SELECT 
-                        shop_id, 
-                        COUNT(id) AS total_orders_sent, 
-                        SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS total_orders_delivered, 
-                        SUM(CASE WHEN status IN ('delivered', 'failed_delivery') THEN 1 ELSE 0 END) AS total_orders_processed, 
-                        SUM(CASE WHEN status = 'delivered' AND payment_status = 'cash' THEN article_amount ELSE 0 END) AS gains_cash, 
-                        SUM(CASE WHEN status = 'failed_delivery' THEN amount_received ELSE 0 END) AS gains_failed, 
+                    SELECT
+                        shop_id,
+                        COUNT(id) AS total_orders_sent,
+                        SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS total_orders_delivered,
+                        SUM(CASE WHEN status IN ('delivered', 'failed_delivery') THEN 1 ELSE 0 END) AS total_orders_processed,
+                        SUM(CASE WHEN status = 'delivered' AND payment_status = 'cash' THEN article_amount ELSE 0 END) AS gains_cash,
+                        SUM(CASE WHEN status = 'failed_delivery' THEN amount_received ELSE 0 END) AS gains_failed,
                         SUM(CASE WHEN status IN ('delivered', 'failed_delivery') THEN delivery_fee ELSE 0 END) AS total_delivery_fees
                     FROM orders WHERE DATE(created_at) = ? GROUP BY shop_id
                 ) AS todays_orders ON s.id = todays_orders.shop_id
                 LEFT JOIN (
-                    SELECT shop_id, SUM(amount) as total_amount
+                    SELECT
+                        shop_id,
+                        SUM(CASE
+                            WHEN type = 'storage_fee' OR (type = '' AND comment LIKE 'Frais de stockage%')
+                            THEN amount
+                            ELSE 0
+                        END) AS storage_fee_today,
+                        SUM(CASE
+                            WHEN type = 'expedition'
+                            THEN amount
+                            ELSE 0
+                        END) AS expedition_fee_today
                     FROM debts WHERE DATE(created_at) = ? AND status = 'pending' GROUP BY shop_id
                 ) AS todays_debts ON s.id = todays_debts.shop_id
                 LEFT JOIN (
@@ -46,11 +58,12 @@ module.exports = {
             const [rows] = await connection.execute(query, [date, date, previousDebtsDate]);
             return rows.map(row => {
                 const merchantGains = parseFloat(row.total_revenue_articles_cash) + parseFloat(row.total_revenue_articles_failed);
-                const merchantDebts = parseFloat(row.total_delivery_fees) + parseFloat(row.total_packaging_fees) + parseFloat(row.total_daily_debts) + parseFloat(row.previous_debts);
+                const merchantDebts = parseFloat(row.total_delivery_fees)
+                                    + parseFloat(row.total_packaging_fees)
+                                    + parseFloat(row.total_storage_fees)
+                                    + parseFloat(row.total_expedition_fees)
+                                    + parseFloat(row.previous_debts);
                 const amountToRemit = merchantGains - merchantDebts;
-                
-                // On récupère la somme des frais de stockage du jour pour l'affichage, même si elle est déjà dans total_daily_debts
-                const total_storage_fees_today = parseFloat(row.total_daily_debts); // Pour simplifier, on peut affirmer que les dettes du jour sont principalement le stockage, mais la logique de calcul reste correcte
 
                 return {
                     shop_id: row.shop_id,
@@ -60,7 +73,8 @@ module.exports = {
                     total_revenue_articles: merchantGains,
                     total_delivery_fees: parseFloat(row.total_delivery_fees),
                     total_packaging_fees: parseFloat(row.total_packaging_fees),
-                    total_storage_fees: total_storage_fees_today, // Note: Ce champ est maintenant pour l'affichage, le calcul utilise total_daily_debts
+                    total_storage_fees: parseFloat(row.total_storage_fees),
+                    total_expedition_fees: parseFloat(row.total_expedition_fees),
                     previous_debts: parseFloat(row.previous_debts),
                     amount_to_remit: amountToRemit,
                 };
@@ -69,7 +83,7 @@ module.exports = {
             connection.release();
         }
     },
-    
+
     findDetailedReport: async (date, shopId) => {
         const connection = await dbConnection.getConnection();
         try {
