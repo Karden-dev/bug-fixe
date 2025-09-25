@@ -80,7 +80,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             };
             const response = await axios.get(`${API_BASE_URL}/remittances`, { params });
             const { remittances, stats } = response.data;
-            renderRemittanceTable(remittances);
+
+            // Filtrer pour n'afficher que les montants > 0
+            const filteredRemittances = remittances.filter(rem => rem.total_payout_amount > 0);
+
+            renderRemittanceTable(filteredRemittances);
             updateStatsCards(stats);
         } catch (error) {
             console.error("Erreur lors de la récupération des versements:", error);
