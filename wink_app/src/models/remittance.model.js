@@ -26,11 +26,14 @@ const findForRemittance = async (filters = {}) => {
                     ELSE 0
                 END
             ), 0) AS orders_payout_amount,
-            (SELECT COALESCE(SUM(amount), 0) FROM debts WHERE shop_id = s.id AND status = 'pending') AS total_debt_amount,
-            (SELECT COALESCE(SUM(amount), 0) FROM remittances WHERE shop_id = s.id AND status IN ('paid', 'partially_paid')) AS total_remitted_amount
+            (SELECT COALESCE(SUM(amount), 0) FROM debts WHERE shop_id = s.id AND status = 'pending' AND DATE(created_at) BETWEEN ? AND ?) AS total_debt_amount
         FROM shops s
         LEFT JOIN orders o ON s.id = o.shop_id
     `;
+    
+    // Déplace les paramètres de date dans la clause WHERE
+    const dateParams = [moment(startDate).startOf('day').format('YYYY-MM-DD HH:mm:ss'), moment(endDate).endOf('day').format('YYYY-MM-DD HH:mm:ss')];
+    params.push(...dateParams);
 
     let whereClause = ` WHERE 1=1 `;
     
@@ -41,18 +44,17 @@ const findForRemittance = async (filters = {}) => {
 
     if (startDate && endDate) {
         whereClause += ` AND o.created_at BETWEEN ? AND ?`;
-        params.push(moment(startDate).startOf('day').format('YYYY-MM-DD HH:mm:ss'), moment(endDate).endOf('day').format('YYYY-MM-DD HH:mm:ss'));
+        params.push(...dateParams);
     }
-
+    
     query += whereClause + ` GROUP BY s.id ORDER BY s.name ASC`;
     const [shops] = await dbConnection.execute(query, params);
 
     const remittancesWithStatus = shops.map(shop => {
         const totalOrdersPayout = parseFloat(shop.orders_payout_amount);
         const totalDebt = parseFloat(shop.total_debt_amount);
-        const totalRemitted = parseFloat(shop.total_remitted_amount);
         
-        const currentBalance = totalOrdersPayout - totalDebt - totalRemitted;
+        const currentBalance = totalOrdersPayout - totalDebt;
 
         let shopStatus;
         if (currentBalance > 0) {
@@ -70,7 +72,6 @@ const findForRemittance = async (filters = {}) => {
         };
     });
 
-    // Si le statut est spécifié, on filtre la liste. Sinon, on retourne la liste complète.
     if (status) {
         return remittancesWithStatus.filter(shop => shop.status === status);
     }
