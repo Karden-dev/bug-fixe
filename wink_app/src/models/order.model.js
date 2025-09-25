@@ -17,9 +17,11 @@ module.exports = {
         try {
             await connection.beginTransaction();
 
+            const orderCreatedAt = orderData.created_at ? moment(orderData.created_at).format('YYYY-MM-DD HH:mm:ss') : moment().format('YYYY-MM-DD HH:mm:ss');
+
             const orderQuery = `
                 INSERT INTO orders (shop_id, customer_name, customer_phone, delivery_location, article_amount, delivery_fee, expedition_fee, status, payment_status, created_by, created_at) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`;
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
             const [orderResult] = await connection.execute(orderQuery, [
                 orderData.shop_id,
                 orderData.customer_name,
@@ -30,7 +32,8 @@ module.exports = {
                 orderData.expedition_fee,
                 'pending',
                 'pending',
-                orderData.created_by
+                orderData.created_by,
+                orderCreatedAt
             ]);
             const orderId = orderResult.insertId;
 
@@ -45,8 +48,8 @@ module.exports = {
             if (orderData.expedition_fee && orderData.expedition_fee > 0) {
                 const comment = `Frais d'expédition pour la commande n°${orderId}`;
                 await connection.execute(
-                    'INSERT INTO debts (shop_id, order_id, amount, type, comment) VALUES (?, ?, ?, ?, ?)',
-                    [orderData.shop_id, orderId, orderData.expedition_fee, 'expedition', comment]
+                    'INSERT INTO debts (shop_id, order_id, amount, type, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+                    [orderData.shop_id, orderId, orderData.expedition_fee, 'expedition', comment, orderCreatedAt]
                 );
             }
 
@@ -144,13 +147,15 @@ module.exports = {
             const fieldsToUpdate = [];
             const params = [];
             
-            // Correction de la logique de mise à jour des frais d'expédition pour éviter les doublons
             const newExpeditionFee = parseFloat(orderData.expedition_fee || 0);
+            
             const [existingDebtRows] = await connection.execute(
-                'SELECT id FROM debts WHERE order_id = ? AND type = "expedition" AND status = "pending"',
+                'SELECT id FROM debts WHERE order_id = ? AND type = "expedition"',
                 [orderId]
             );
             const existingDebtId = existingDebtRows.length > 0 ? existingDebtRows[0].id : null;
+            
+            const orderCreatedAt = orderData.created_at ? moment(orderData.created_at).format('YYYY-MM-DD HH:mm:ss') : null;
 
             if (newExpeditionFee > 0) {
                 if (existingDebtId) {
@@ -160,14 +165,13 @@ module.exports = {
                     );
                 } else {
                     await connection.execute(
-                        'INSERT INTO debts (shop_id, order_id, amount, type, comment) VALUES (?, ?, ?, ?, ?)',
-                        [orderData.shop_id, orderId, newExpeditionFee, 'expedition', `Frais d'expédition pour la commande n°${orderId}`]
+                        'INSERT INTO debts (shop_id, order_id, amount, type, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+                        [orderData.shop_id, orderId, newExpeditionFee, 'expedition', `Frais d'expédition pour la commande n°${orderId}`, orderCreatedAt]
                     );
                 }
             } else if (existingDebtId) {
                 await connection.execute('DELETE FROM debts WHERE id = ?', [existingDebtId]);
             }
-            // Fin de la correction
 
             const validFields = [
                 'shop_id', 'customer_name', 'customer_phone', 'delivery_location',
@@ -302,7 +306,6 @@ module.exports = {
             await connection.execute(historyQuery, [orderId, historyMessage, userId]);
 
             await connection.commit();
-            return { success: true };
         } catch (error) {
             await connection.rollback();
             throw error;
