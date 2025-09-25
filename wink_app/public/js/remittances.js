@@ -4,8 +4,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const API_BASE_URL = 'https://test.winkexpress.online';
     const remittanceTableBody = document.getElementById('remittanceTableBody');
     const searchInput = document.getElementById('searchInput');
-    const startDateFilter = document.getElementById('startDateFilter');
-    const endDateFilter = document.getElementById('endDateFilter');
+    const reportDateFilter = document.getElementById('reportDateFilter');
     const statusFilter = document.getElementById('statusFilter');
     const filterBtn = document.getElementById('filterBtn');
     const exportPdfBtn = document.getElementById('exportPdfBtn');
@@ -69,16 +68,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const today = new Date();
     const formattedDate = today.toISOString().split('T')[0];
-    startDateFilter.value = formattedDate;
-    endDateFilter.value = formattedDate;
-    statusFilter.value = 'pending';
+    reportDateFilter.value = formattedDate;
 
     const fetchRemittances = async () => {
         try {
             const params = {
                 search: searchInput.value,
-                startDate: startDateFilter.value,
-                endDate: endDateFilter.value,
+                startDate: reportDateFilter.value,
+                endDate: reportDateFilter.value,
                 status: statusFilter.value
             };
             const response = await axios.get(`${API_BASE_URL}/remittances`, { params });
@@ -149,8 +146,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     filterBtn.addEventListener('click', fetchRemittances);
     searchInput.addEventListener('input', fetchRemittances);
-    startDateFilter.addEventListener('change', fetchRemittances);
-    endDateFilter.addEventListener('change', fetchRemittances);
+    reportDateFilter.addEventListener('change', fetchRemittances);
     statusFilter.addEventListener('change', fetchRemittances);
     
     remittanceTableBody.addEventListener('click', async (e) => {
