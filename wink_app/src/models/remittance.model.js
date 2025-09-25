@@ -1,154 +1,169 @@
-const remittanceModel = require('../models/remittance.model');
-const remittancesService = require('../services/remittances.service');
-const PDFDocument = require('pdfkit');
+// src/models/remittance.model.js
 const moment = require('moment');
-const fs = require('fs');
 
-const getRemittances = async (req, res) => {
-    try {
-        const filters = req.query;
-        // On ne force plus le statut 'pending', on utilise le filtre de l'utilisateur
-        const remittances = await remittanceModel.findForRemittance(filters);
+let dbConnection;
 
-        const stats = {
-            orangeMoneyTotal: 0,
-            orangeMoneyTransactions: 0,
-            mtnMoneyTotal: 0,
-            mtnMoneyTransactions: 0,
-            totalRemittanceAmount: 0,
-            totalTransactions: remittances.length
+const init = (connection) => {
+    dbConnection = connection;
+};
+
+const findForRemittance = async (filters = {}) => {
+    const { search, startDate, endDate, status } = filters;
+    
+    // On réutilise la même logique de calcul que pour les rapports journaliers
+    const dateFilterParams = [
+        moment(startDate).startOf('day').format('YYYY-MM-DD HH:mm:ss'),
+        moment(endDate).endOf('day').format('YYYY-MM-DD HH:mm:ss')
+    ];
+    
+    const previousDebtsDate = moment(startDate).startOf('day').format('YYYY-MM-DD HH:mm:ss');
+    
+    const params = [...dateFilterParams, ...dateFilterParams, previousDebtsDate];
+
+    let query = `
+        SELECT
+            s.id AS shop_id,
+            s.name AS shop_name,
+            s.payment_name AS payment_name,
+            s.phone_number_for_payment AS phone_number_for_payment,
+            s.payment_operator AS payment_operator,
+            COALESCE(todays_orders.gains_cash, 0) AS total_revenue_articles_cash,
+            COALESCE(todays_orders.gains_failed, 0) AS total_revenue_articles_failed,
+            COALESCE(todays_debts.total_delivery_fees, 0) AS total_delivery_fees,
+            COALESCE(todays_debts.packaging_fee_today, 0) AS total_packaging_fees,
+            COALESCE(todays_debts.storage_fee_today, 0) AS total_storage_fees,
+            COALESCE(todays_debts.expedition_fee_today, 0) AS total_expedition_fees,
+            COALESCE(previous_debts.total_pending_debts, 0) AS previous_debts
+        FROM shops s
+        LEFT JOIN (
+            SELECT
+                shop_id,
+                SUM(CASE WHEN status = 'delivered' AND payment_status = 'cash' THEN article_amount ELSE 0 END) AS gains_cash,
+                SUM(CASE WHEN status = 'failed_delivery' THEN amount_received ELSE 0 END) AS gains_failed
+            FROM orders
+            WHERE created_at BETWEEN ? AND ?
+            GROUP BY shop_id
+        ) AS todays_orders ON s.id = todays_orders.shop_id
+        LEFT JOIN (
+            SELECT
+                shop_id,
+                SUM(CASE WHEN type = 'packaging' THEN amount ELSE 0 END) AS packaging_fee_today,
+                SUM(CASE WHEN type = 'storage_fee' THEN amount ELSE 0 END) AS storage_fee_today,
+                SUM(CASE WHEN type = 'expedition' THEN amount ELSE 0 END) AS expedition_fee_today,
+                SUM(CASE WHEN type = 'delivery_fee' THEN amount ELSE 0 END) AS total_delivery_fees
+            FROM debts
+            WHERE created_at BETWEEN ? AND ? AND status = 'pending'
+            GROUP BY shop_id
+        ) AS todays_debts ON s.id = todays_debts.shop_id
+        LEFT JOIN (
+            SELECT shop_id, SUM(amount) AS total_pending_debts
+            FROM debts
+            WHERE status = 'pending' AND created_at < ?
+            GROUP BY shop_id
+        ) AS previous_debts ON s.id = previous_debts.shop_id
+    `;
+    
+    let whereClause = ` WHERE 1=1 `;
+    
+    if (search) {
+        whereClause += ` AND (s.name LIKE ? OR s.payment_name LIKE ? OR s.phone_number_for_payment LIKE ?)`;
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+
+    query += whereClause + ` GROUP BY s.id ORDER BY s.name ASC`;
+    const [shops] = await dbConnection.execute(query, params);
+
+    const remittancesWithStatus = shops.map(shop => {
+        const merchantGains = parseFloat(shop.total_revenue_articles_cash) + parseFloat(shop.total_revenue_articles_failed);
+        const merchantDebts = parseFloat(shop.total_delivery_fees) + parseFloat(shop.total_packaging_fees) + parseFloat(shop.total_storage_fees) + parseFloat(shop.total_expedition_fees) + parseFloat(shop.previous_debts);
+        const currentBalance = merchantGains - merchantDebts;
+
+        let shopStatus;
+        if (currentBalance > 0) {
+            shopStatus = 'pending';
+        } else if (currentBalance === 0) {
+            shopStatus = 'paid';
+        } else if (currentBalance < 0) {
+            shopStatus = 'partially_paid';
+        }
+
+        return {
+            ...shop,
+            total_payout_amount: currentBalance,
+            status: shopStatus
         };
+    });
 
-        remittances.forEach(rem => {
-            if (rem.payment_operator === 'Orange Money') {
-                stats.orangeMoneyTotal += rem.total_payout_amount;
-                stats.orangeMoneyTransactions++;
-            } else if (rem.payment_operator === 'MTN Mobile Money') {
-                stats.mtnMoneyTotal += rem.total_payout_amount;
-                stats.mtnMoneyTransactions++;
-            }
-            stats.totalRemittanceAmount += rem.total_payout_amount;
-        });
-
-        res.json({ remittances, stats });
-    } catch (error) {
-        console.error("Erreur lors de la récupération des versements:", error);
-        res.status(500).json({ message: 'Erreur serveur lors de la récupération des versements', error: error.message });
+    if (status) {
+        return remittancesWithStatus.filter(shop => shop.status === status);
     }
+    
+    return remittancesWithStatus;
 };
 
-const getRemittanceDetails = async (req, res) => {
+const getShopDetails = async (shopId) => {
+    const connection = await dbConnection.getConnection();
     try {
-        const { shopId } = req.params;
-        const details = await remittanceModel.getShopDetails(shopId);
-        res.json(details);
-    } catch (error) {
-        console.error("Erreur lors de la récupération des détails du versement:", error);
-        res.status(500).json({ message: 'Erreur serveur lors de la récupération des détails', error: error.message });
-    }
-};
+        const [remittances] = await connection.execute(
+            'SELECT * FROM remittances WHERE shop_id = ? ORDER BY payment_date DESC',
+            [shopId]
+        );
 
-const recordRemittance = async (req, res) => {
-    try {
-        const { shopId, amount, paymentOperator, status, transactionId, comment, userId } = req.body;
-        if (!shopId || !amount || !status || !userId) {
-            return res.status(400).json({ message: "Les champs shopId, amount, status et userId sont requis." });
-        }
-        await remittancesService.recordRemittance(shopId, amount, paymentOperator, status, transactionId, comment, userId);
-        res.status(201).json({ message: "Versement enregistré avec succès." });
-    } catch (error) {
-        console.error("Erreur lors de l'enregistrement du versement:", error);
-        res.status(500).json({ message: 'Erreur serveur lors de l\'enregistrement du versement', error: error.message });
-    }
-};
-
-const updateShopPaymentDetails = async (req, res) => {
-    try {
-        const { shopId } = req.params;
-        const paymentData = req.body;
-        await remittanceModel.updateShopPaymentDetails(shopId, paymentData);
-        res.status(200).json({ message: 'Détails de paiement mis à jour avec succès.' });
-    } catch (error) {
-        console.error("Erreur lors de la mise à jour des détails de paiement:", error);
-        res.status(500).json({ message: 'Erreur serveur lors de la mise à jour des détails', error: error.message });
-    }
-};
-
-const exportPdf = async (req, res) => {
-    try {
-        const pendingRemittances = await remittanceModel.findForRemittance({ status: 'pending' });
-
-        if (pendingRemittances.length === 0) {
-            return res.status(404).json({ message: "Aucun versement en attente à exporter." });
-        }
+        const [debts] = await connection.execute(
+            'SELECT * FROM debts WHERE shop_id = ? AND status = "pending" ORDER BY created_at DESC',
+            [shopId]
+        );
         
-        const doc = new PDFDocument({ margin: 50 });
-        const buffers = [];
-        doc.on('data', buffers.push.bind(buffers));
-        doc.on('end', () => {
-            let pdfData = Buffer.concat(buffers);
-            res.writeHead(200, {
-                'Content-Type': 'application/pdf',
-                'Content-Disposition': 'attachment;filename=rapport_versements_en_attente.pdf',
-                'Content-Length': pdfData.length
-            }).end(pdfData);
-        });
+        const [ordersPayout] = await connection.execute(
+             `
+             SELECT
+                COALESCE(SUM(
+                    CASE
+                        WHEN status = 'delivered' AND payment_status = 'cash' THEN article_amount - delivery_fee
+                        WHEN status = 'delivered' AND payment_status = 'paid_to_supplier' THEN -delivery_fee
+                        WHEN status = 'failed_delivery' THEN amount_received - delivery_fee
+                        ELSE 0
+                    END
+                ), 0) AS orders_payout_amount
+            FROM orders
+            WHERE shop_id = ? AND (status IN ('delivered', 'failed_delivery'))
+             `,
+             [shopId]
+        );
+        const ordersPayoutAmount = ordersPayout[0].orders_payout_amount || 0;
 
-        doc.fontSize(20).text('Rapport de Versements en Attente', { align: 'center' });
-        doc.moveDown(0.5);
-        doc.fontSize(12).text(`Date du rapport : ${moment().format('DD/MM/YYYY')}`, { align: 'center' });
-        doc.moveDown(2);
+        const totalDebt = debts.reduce((sum, debt) => sum + parseFloat(debt.amount), 0);
+        const totalRemitted = remittances.reduce((sum, rem) => sum + parseFloat(rem.amount), 0);
+        const currentBalance = ordersPayoutAmount - totalDebt - totalRemitted;
 
-        const createTable = (data, headers, title) => {
-            const tableStartY = doc.y;
-            const columnWidths = [150, 100, 100, 150];
-            const startX = 50;
-
-            doc.fontSize(14).text(title, { underline: true });
-            doc.moveDown(0.5);
-
-            doc.font('Helvetica-Bold');
-            let currentX = startX;
-            headers.forEach((header, i) => {
-                doc.text(header, currentX, doc.y, { width: columnWidths[i] });
-                currentX += columnWidths[i] + 10;
-            });
-            doc.moveDown();
-            
-            doc.font('Helvetica');
-            data.forEach(row => {
-                currentX = startX;
-                row.forEach((cell, i) => {
-                    doc.text(cell, currentX, doc.y, { width: columnWidths[i] });
-                    currentX += columnWidths[i] + 10;
-                });
-                doc.moveDown();
-            });
-        };
-
-        const tableHeaders = ['Marchand', 'Téléphone', 'Opérateur', 'Montant à verser'];
-        const tableData = pendingRemittances.map(rem => [
-            rem.shop_name,
-            rem.phone_number_for_payment || 'N/A',
-            rem.payment_operator || 'N/A',
-            `${rem.total_payout_amount.toLocaleString('fr-FR')} FCFA`
-        ]);
-
-        createTable(tableData, tableHeaders, "Liste des Marchands avec Solde Positif");
-
-        doc.end();
-
-    } catch (error) {
-        console.error("Erreur lors de la génération du PDF:", error);
-        res.status(500).json({ message: 'Erreur serveur lors de la génération du PDF', error: error.message });
+        return { remittances, debts, currentBalance };
+    } finally {
+        connection.release();
     }
 };
 
+const updateShopPaymentDetails = async (shopId, paymentData) => {
+    const { payment_name, phone_number_for_payment, payment_operator } = paymentData;
+    const query = 'UPDATE shops SET payment_name = ?, phone_number_for_payment = ?, payment_operator = ? WHERE id = ?';
+    const [result] = await dbConnection.execute(query, [payment_name, phone_number_for_payment, payment_operator, shopId]);
+    return result;
+};
+
+const recordRemittance = async (shopId, amount, paymentOperator, status, transactionId = null, comment = null, userId) => {
+    const query = 'INSERT INTO remittances (shop_id, amount, payment_date, payment_operator, status, transaction_id, comment, user_id) VALUES (?, ?, CURDATE(), ?, ?, ?, ?, ?)';
+    const [result] = await dbConnection.execute(query, [shopId, amount, paymentOperator, status, transactionId, comment, userId]);
+    
+    if (status === 'paid') {
+        await dbConnection.execute('UPDATE debts SET status = "paid" WHERE shop_id = ? AND status = "pending"', [shopId]);
+    }
+
+    return result;
+};
 
 module.exports = {
-    getRemittances,
-    getRemittanceDetails,
-    recordRemittance,
+    init,
+    findForRemittance,
+    getShopDetails,
     updateShopPaymentDetails,
-    exportPdf
+    recordRemittance,
 };
