@@ -147,8 +147,10 @@ module.exports = {
             const fieldsToUpdate = [];
             const params = [];
             
+            // Correction de la logique de mise à jour des frais d'expédition pour éviter les doublons
             const newExpeditionFee = parseFloat(orderData.expedition_fee || 0);
             
+            // On recherche toutes les créances d'expédition pour cette commande, quel que soit leur statut
             const [existingDebtRows] = await connection.execute(
                 'SELECT id FROM debts WHERE order_id = ? AND type = "expedition"',
                 [orderId]
@@ -172,6 +174,7 @@ module.exports = {
             } else if (existingDebtId) {
                 await connection.execute('DELETE FROM debts WHERE id = ?', [existingDebtId]);
             }
+            // Fin de la correction
 
             const validFields = [
                 'shop_id', 'customer_name', 'customer_phone', 'delivery_location',
