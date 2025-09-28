@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WINK EXPRESS - Versements</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --bs-corail: #FF7F50;
+            --bs-bleu-profond: #2C3E50;
+            --bs-bleu-celeste: #4A6491;
+            --bs-blanc-creme: #F8F9FA;
+            --bs-gris-anthracite: #34495E;
+            --orange-money: #e67e22;
+            --mtn-money: #f1c40f;
+        }
+        body { background-color: var(--bs-blanc-creme); font-family: sans-serif; display: flex; }
+        .sidebar { width: 250px; background-color: var(--bs-bleu-profond); min-height: 100vh; position: fixed; top: 0; left: 0; color: white; padding: 20px; transition: all 0.3s; z-index: 1000; }
+        .sidebar.collapsed { margin-left: -250px; }
+        .main-content { margin-left: 250px; padding: 20px; flex-grow: 1; transition: all 0.3s; display: flex; flex-direction: column; }
+        .main-content.expanded { margin-left: 0; }
+        .nav-link { color: white; padding: 10px 15px; border-radius: 5px; margin-bottom: 5px; }
+        .nav-link:hover { background-color: var(--bs-bleu-celeste); }
+        .nav-link.active { background-color: var(--bs-corail); }
+        .top-header { background-color: white; padding: 15px 20px; border-bottom: 1px solid #dee2e6; display: flex; justify-content: space-between; align-items: center; }
+        .card { border: none; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        .table thead { background-color: var(--bs-bleu-profond); color: white; font-size: 0.8rem; position: sticky; top: 0; }
+        .table td { vertical-align: middle; font-size: 0.85rem; }
+        .btn-corail { background-color: var(--bs-corail); border-color: var(--bs-corail); color: white; }
+        .btn-corail:hover { background-color: #FF6347; border-color: #FF6347; }
+        #notification-container { position: fixed; top: 20px; right: 20px; z-index: 1050; width: 350px; }
+        .stats-cards-row { display: flex; flex-wrap: wrap; gap: 1rem; }
+        .stats-card { min-width: 220px; flex: 1 1 auto; text-align: center; padding: 1rem; }
+        .operator-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+        .status-badge { display: flex; align-items: center; gap: 5px; }
+        .status-dot { height: 8px; width: 8px; border-radius: 50%; }
+        .status-pending { background-color: #f39c12; }
+        .status-paid { background-color: #2ecc71; }
+        .bg-orange-money { background-color: var(--orange-money); }
+        .bg-mtn-money { background-color: var(--mtn-money); }
+        .bg-corail-dark { background-color: var(--bs-corail); }
+    </style>
+</head>
+<body>
+    <div id="notification-container"></div>
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-header d-flex justify-content-center">
+            <img src="wink-logo.png" alt="Logo WINK EXPRESS" style="width: 150px;">
+        </div>
+        <ul class="nav flex-column mt-4">
+            <li class="nav-item"><a class="nav-link" href="dashboard.html"><i class="bi bi-speedometer2"></i> Tableau de bord</a></li>
+            <li class="nav-item"><a class="nav-link" href="orders.html"><i class="bi bi-box-seam"></i> Commandes</a></li>
+            <li class="nav-item"><a class="nav-link" href="deliverymen.html"><i class="bi bi-bicycle"></i> Livreurs</a></li>
+            <li class="nav-item"><a class="nav-link" href="shops.html"><i class="bi bi-shop"></i> Marchands</a></li>
+            <li class="nav-item"><a class="nav-link" href="reports.html"><i class="bi bi-file-earmark-bar-graph"></i> Rapports</a></li>
+            <li class="nav-item"><a class="nav-link active" href="remittances.html"><i class="bi bi-wallet"></i> Versements</a></li>
+            <li class="nav-item"><a class="nav-link" href="users.html"><i class="bi bi-person"></i> Utilisateurs</a></li>
+        </ul>
+    </div>
+
+    <div class="main-content" id="main-content">
+        <div class="top-header">
+            <i class="bi bi-list" id="sidebar-toggler" style="cursor: pointer;"></i>
+            <h1 class="h4 mb-0 ms-3 flex-grow-1">Gestion des Versements</h1>
+            <div class="dropdown">
+                <a href="#" class="d-flex align-items-center text-dark text-decoration-none dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                    <img src="https://ui-avatars.com/api/?name=A&size=32&background=2C3E50&color=fff&rounded=true" alt="Avatar" width="32" height="32" class="rounded-circle me-2">
+                    <span id="userName">Admin</span>
+                </a>
+                <ul class="dropdown-menu text-small shadow">
+                    <li><a class="dropdown-item" href="#" id="logoutBtn">Déconnexion</a></li>
+                </ul>
+            </div>
+        </div>
+
+        <hr class="mt-4">
+
+        <div class="stats-cards-row mb-4">
+            <div class="card bg-orange-money text-white stats-card">
+                <div class="card-body py-2">
+                    <h6 class="card-title text-uppercase mb-0">OM à verser</h6>
+                    <h4 class="card-text fw-bold mb-0 mt-1" id="orangeMoneyTotal">0 FCFA</h4>
+                    <small id="orangeMoneyTransactions">0 trans.</small>
+                </div>
+            </div>
+            <div class="card bg-mtn-money text-dark stats-card">
+                <div class="card-body py-2">
+                    <h6 class="card-title text-uppercase mb-0">MOMO à verser</h6>
+                    <h4 class="card-text fw-bold mb-0 mt-1" id="mtnMoneyTotal">0 FCFA</h4>
+                    <small id="mtnMoneyTransactions">0 trans.</small>
+                </div>
+            </div>
+            <div class="card bg-corail-dark text-white stats-card">
+                <div class="card-body py-2">
+                    <h6 class="card-title text-uppercase mb-0">Total à verser</h6>
+                    <h4 class="card-text fw-bold mb-0 mt-1" id="totalRemittanceAmount">0 FCFA</h4>
+                    <small id="totalTransactions">0 trans. en attente</small>
+                </div>
+            </div>
+        </div>
+
+        <div class="card p-4 flex-grow-1 d-flex flex-column">
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+                <div class="input-group input-group-sm" style="max-width: 300px;">
+                    <span class="input-group-text"><i class="bi bi-search"></i></span>
+                    <input type="text" class="form-control" id="searchInput" placeholder="Nom, téléphone, ID transaction...">
+                </div>
+                <div class="input-group input-group-sm" style="max-width: 180px;">
+                    <span class="input-group-text">Du</span>
+                    <input type="date" class="form-control" id="startDateFilter">
+                </div>
+                <div class="input-group input-group-sm" style="max-width: 180px;">
+                    <span class="input-group-text">Au</span>
+                    <input type="date" class="form-control" id="endDateFilter">
+                </div>
+                <select class="form-select form-select-sm" id="statusFilter" style="width: auto;">
+                    <option value="">Tous les statuts</option>
+                    <option value="pending" selected>En attente</option>
+                    <option value="paid">Payé</option>
+                </select>
+                <button class="btn btn-sm btn-dark" id="filterBtn">Filtrer</button>
+                <div class="ms-auto">
+                    <button class="btn btn-sm btn-primary" id="exportPdfBtn"><i class="bi bi-file-earmark-pdf"></i> Exporter</button>
+                    <button class="btn btn-sm btn-corail" id="bulkPayBtn"><i class="bi bi-cash-stack"></i> Tout Payer</button>
+                </div>
+            </div>
+            
+            <div class="table-responsive">
+                <table class="table table-hover table-sm">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Marchand</th>
+                            <th>Nom Versement</th>
+                            <th>Téléphone</th>
+                            <th>Opérateur</th>
+                            <th>Montant</th>
+                            <th>Date</th>
+                            <th>Statut</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="remittanceTableBody"></tbody>
+                </table>
+            </div>
+            <div class="d-flex justify-content-between align-items-center mt-3">
+                <div>
+                    <label for="itemsPerPage" class="form-label form-label-sm d-inline-block me-2">Lignes:</label>
+                    <select class="form-select form-select-sm d-inline-block" id="itemsPerPage" style="width: 70px;">
+                        <option value="10">10</option><option value="25" selected>25</option><option value="50">50</option><option value="100">100</option>
+                    </select>
+                </div>
+                <div>
+                    <span id="paginationInfo" class="me-3 text-muted small"></span>
+                    <nav><ul class="pagination pagination-sm mb-0">
+                        <li class="page-item" id="firstPage"><a class="page-link" href="#">&laquo;</a></li>
+                        <li class="page-item" id="prevPage"><a class="page-link" href="#">‹</a></li>
+                        <li class="page-item disabled"><span class="page-link" id="currentPageDisplay">1</span></li>
+                        <li class="page-item" id="nextPage"><a class="page-link" href="#">›</a></li>
+                        <li class="page-item" id="lastPage"><a class="page-link" href="#">&raquo;</a></li>
+                    </ul></nav>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="modal fade" id="editPaymentModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Infos de Versement</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <form id="editPaymentForm">
+                    <div class="modal-body">
+                        <input type="hidden" id="editShopId">
+                        <div class="mb-3">
+                            <label for="paymentNameInput" class="form-label">Nom du compte</label>
+                            <input type="text" class="form-control" id="paymentNameInput">
+                        </div>
+                        <div class="mb-3">
+                            <label for="phoneNumberInput" class="form-label">Numéro de téléphone</label>
+                            <input type="tel" class="form-control" id="phoneNumberInput">
+                        </div>
+                        <div class="mb-3">
+                            <label for="paymentOperatorSelect" class="form-label">Opérateur</label>
+                            <select class="form-select" id="paymentOperatorSelect">
+                                <option value="">Choisir...</option>
+                                <option value="Orange Money">Orange Money</option>
+                                <option value="MTN Mobile Money">MTN Mobile Money</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
+                        <button type="submit" class="btn btn-corail">Enregistrer</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/moment@2.29.1/moment.min.js"></script>
+    <script src="js/remittances.js"></script>
+</body>
+</html>
