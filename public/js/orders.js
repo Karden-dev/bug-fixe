@@ -80,7 +80,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Pagination State
     let currentPage = 1;
-    let itemsPerPage = parseInt(itemsPerPageSelect.value); // Initialisation à partir du DOM (25 par défaut)
+    let itemsPerPage = parseInt(itemsPerPageSelect.value);
     
     const statusTranslations = {
         'pending': 'En attente', 'in_progress': 'En cours', 'delivered': 'Livrée',
@@ -97,7 +97,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         'pending': 'payment-pending', 'cash': 'payment-cash', 'paid_to_supplier': 'payment-supplier_paid', 'cancelled': 'payment-cancelled'
     };
     
-    // Fonction de troncature ajoutée précédemment
     const truncateText = (text, maxLength) => {
         if (!text) return 'N/A';
         const str = String(text);
@@ -127,10 +126,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const alert = document.createElement('div');
         alert.className = `alert alert-${type} alert-dismissible fade show`;
         alert.role = 'alert';
-        alert.innerHTML = `
-            ${message}
-            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-        `;
+        alert.innerHTML = `${message}<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>`;
         container.appendChild(alert);
         setTimeout(() => alert.remove(), 5000);
     };
@@ -158,17 +154,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             const ordersRes = await axios.get(`${API_BASE_URL}/orders`, { params });
             allOrders = ordersRes.data;
-            filteredOrders = allOrders; // Après le filtre API, toutes les données sont "filtrées"
-            currentPage = 1; // Toujours revenir à la première page après un nouveau filtre/recherche
-            renderPaginatedTable(); // Afficher la première page des résultats complets
+            filteredOrders = allOrders;
+            currentPage = 1;
+            renderPaginatedTable();
         } catch (error) {
             console.error("Erreur lors de l'application des filtres:", error);
             ordersTableBody.innerHTML = `<tr><td colspan="12" class="text-center text-danger p-4">Erreur lors du filtrage des données.</td></tr>`;
             updatePaginationInfo(0);
         }
     };
-    
-    // --- FONCTIONS DE PAGINATION AJOUTÉES ---
     
     const updatePaginationInfo = (totalItems) => {
         const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
@@ -205,21 +199,20 @@ document.addEventListener('DOMContentLoaded', async () => {
             const row = document.createElement('tr');
             const totalArticleAmount = parseFloat(order.article_amount || 0);
             const deliveryFee = parseFloat(order.delivery_fee || 0);
+            const expeditionFee = parseFloat(order.expedition_fee || 0);
             const deliverymanName = order.deliveryman_name || 'Non assigné';
             const shopName = order.shop_name || 'N/A';
             
             let payoutAmount = 0;
             if (order.status === 'delivered') {
                 if (order.payment_status === 'cash') {
-                    payoutAmount = totalArticleAmount - deliveryFee;
+                    payoutAmount = totalArticleAmount - deliveryFee - expeditionFee;
                 } else if (order.payment_status === 'paid_to_supplier') {
-                    payoutAmount = -deliveryFee;
+                    payoutAmount = -deliveryFee - expeditionFee;
                 }
             } else if (order.status === 'failed_delivery') {
                 const amountReceived = parseFloat(order.amount_received || 0);
-                payoutAmount = amountReceived - deliveryFee;
-            } else {
-                payoutAmount = 0;
+                payoutAmount = amountReceived - deliveryFee - expeditionFee;
             }
             
             const displayStatus = statusTranslations[order.status] || 'Non spécifié';
@@ -272,10 +265,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         updatePaginationInfo(filteredOrders.length);
     };
     
-    // Remplacer l'ancienne fonction `renderOrdersTable` par `renderPaginatedTable`
-    const renderOrdersTable = renderPaginatedTable;
-
-
     const addItemRow = (container, item = {}) => {
         const itemRow = document.createElement('div');
         itemRow.className = 'row g-2 item-row mb-2';
@@ -337,7 +326,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    // NOUVEAU : Gère la soumission du formulaire de création de marchand
     addShopForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const shopData = {
@@ -352,9 +340,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
             const response = await axios.post(`${API_BASE_URL}/shops`, shopData);
             showNotification('Marchand créé avec succès !');
-            // Met à jour le cache des marchands
             await fetchShops();
-            // Sélectionne le nouveau marchand dans le formulaire de commande
             const newShop = shopsCache.find(s => s.id === response.data.shopId);
             if(newShop){
                 addShopSearchInput.value = newShop.name;
@@ -381,7 +367,6 @@ document.addEventListener('DOMContentLoaded', async () => {
              return;
         }
 
-        // CORRECTION DE LA LOGIQUE: On somme les montants, sans multiplier par la quantité.
         const totalArticleAmount = items.reduce((sum, item) => sum + item.amount, 0);
 
         const orderData = {
@@ -416,7 +401,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             amount: parseFloat(row.querySelector('.item-amount-input').value)
         }));
         
-        // CORRECTION DE LA LOGIQUE: On somme les montants, sans multiplier par la quantité.
         const totalArticleAmount = items.reduce((sum, item) => sum + item.amount, 0);
         
         const expeditionFee = editIsExpeditionCheckbox.checked ? parseFloat(editExpeditionFeeInput.value) : 0;
@@ -850,7 +834,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     deliverymanSearchResultsContainer.classList.remove('d-none');
                 } else {
                     deliverymanSearchResultsContainer.innerHTML = '<div class="p-2 text-muted">Aucun résultat.</div>';
-                    deliverymanSearchResultsContainer.classList.add('d-none');
+                    deliverymanSearchResultsContainer.classList.remove('d-none');
                 }
             } else {
                 deliverymanSearchResultsContainer.classList.add('d-none');
@@ -883,7 +867,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
     
-    // --- LISTENERS DE PAGINATION AJOUTÉS ---
     itemsPerPageSelect.addEventListener('change', (e) => {
         itemsPerPage = parseInt(e.target.value);
         currentPage = 1;
@@ -895,10 +878,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     nextPageBtn.addEventListener('click', (e) => { e.preventDefault(); handlePageChange(currentPage + 1); });
     lastPageBtn.addEventListener('click', (e) => { e.preventDefault(); handlePageChange(Math.ceil(filteredOrders.length / itemsPerPage)); });
     
-    // Le bouton de filtre et la recherche déclenchent déjà applyFilters, qui réinitialise currentPage et appelle renderPaginatedTable.
-    
     await Promise.all([fetchShops(), fetchDeliverymen()]);
-    // itemsPerPage est déjà initialisé ici au démarrage, mais un appel explicite assure la bonne valeur pour la première render.
     itemsPerPage = parseInt(itemsPerPageSelect.value); 
     await fetchAllData();
     setupShopSearch('shopSearchInput', 'searchResults', 'selectedShopId');
