@@ -5,7 +5,7 @@ let dbConnection;
 
 const init = (connection) => {
     dbConnection = connection;
-    // CRITICAL FIX: Expose l'objet de connexion pour éviter le TypeError dans le contrôleur.
+    // CORRECTION CRITIQUE: Expose l'objet de connexion pour éviter le TypeError dans le contrôleur.
     module.exports.dbConnection = connection; 
 };
 
@@ -28,7 +28,6 @@ const syncDailyBalancesToRemittances = async (date, connection) => {
 
     for (const balance of dailyBalances) {
         // 1.5. Calculer la somme des créances en attente (status = 'pending') pour ce marchand.
-        // Ceci est la première ligne de défense contre la double consolidation.
         const [debtRow] = await connection.execute(
             `SELECT COALESCE(SUM(amount), 0) AS total_pending_debts 
              FROM debts 
@@ -128,7 +127,7 @@ const markAsPaid = async (remittanceId, userId) => {
         await connection.beginTransaction();
 
         // 1. Mettre à jour le statut du versement dans 'remittances'
-        const [remittanceRow] = await connection.execute('SELECT shop_id, net_amount FROM remittances WHERE id = ?', [remittanceId]);
+        const [remittanceRow] = await connection.execute('SELECT shop_id FROM remittances WHERE id = ?', [remittanceId]);
         if (remittanceRow.length === 0) {
             throw new Error('Versement non trouvé.');
         }
@@ -191,7 +190,6 @@ const updateShopPaymentDetails = async (shopId, paymentData) => {
 };
 
 const recordRemittance = async (shopId, amount, paymentOperator, status, transactionId = null, comment = null, userId) => {
-    // Cette fonction est utilisée pour insérer de nouveaux versements dans la table remittances.
     const query = 'INSERT INTO remittances (shop_id, amount, remittance_date, payment_operator, status, transaction_id, comment, user_id) VALUES (?, ?, CURDATE(), ?, ?, ?, ?, ?)';
     const [result] = await dbConnection.execute(query, [shopId, amount, paymentOperator, status, transactionId, comment, userId]);
     return result;
