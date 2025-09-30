@@ -2,6 +2,7 @@
 
 document.addEventListener('DOMContentLoaded', () => {
     // --- CONFIGURATION ---
+    // CORRECTION: Utilisation de localhost pour les tests locaux
     const API_BASE_URL = 'http://localhost:3000';
     const CURRENT_USER_ID = 1; // À remplacer par l'ID de l'utilisateur connecté
 
@@ -17,6 +18,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const searchInput = document.getElementById('searchInput');
     const remittanceDateInput = document.getElementById('remittanceDate');
     const statusFilter = document.getElementById('statusFilter');
+    const resyncBtn = document.getElementById('resyncBtn'); // NOUVEAU
     
     // Éléments de pagination et de stats
     const itemsPerPageSelect = document.getElementById('itemsPerPage');
@@ -87,6 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!phone) return 'N/A';
         const cleaned = ('' + phone).replace(/\D/g, '');
         const match = cleaned.match(/^(\d{1})(\d{2})(\d{2})(\d{2})(\d{2})$/);
+        // Format demandé : 0 00 00 00 00 en gras
         if (match) {
             return `<strong>${match[1]} ${match[2]} ${match[3]} ${match[4]} ${match[5]}</strong>`;
         }
@@ -176,19 +179,23 @@ document.addEventListener('DOMContentLoaded', () => {
             // Montants et Créances (nouvelles colonnes)
             const debtsAmount = formatAmount(rem.debts_consolidated || 0); // Créances consolidées
             const grossAmount = formatAmount(rem.gross_amount || 0);
-            const netAmount = formatAmount(rem.net_amount || 0);
+            const netAmount = rem.net_amount || 0;
+            const formattedNetAmount = formatAmount(netAmount);
 
             // L'ID du versement est l'ID de la ligne dans la table 'remittances' (r.id)
             const remittanceId = rem.id; 
+
+            // PROTECTION CLÉ: Le paiement n'est possible que si le statut est pending ET que le montant net est > 0
+            const isPayable = isPending && netAmount > 0; 
 
             row.innerHTML = `
                 <td>${startIndex + index + 1}</td>
                 <td>${rem.shop_name}</td>
                 <td>${remittanceInfo}</td>
                 <td>${rem.payment_operator ? `<span class="operator-dot ${operatorColor}"></span>` : ''} ${rem.payment_operator || 'N/A'}</td>
-                <td class="text-danger fw-bold">${debtsAmount}</td>
                 <td class="text-success fw-bold">${grossAmount}</td>
-                <td class="fw-bold">${netAmount}</td>
+                <td class="text-danger fw-bold">${debtsAmount}</td>
+                <td class="fw-bold">${formattedNetAmount}</td>
                 <td>
                     <span class="status-badge-container">
                         <span class="status-dot ${statusColor}"></span>
@@ -200,7 +207,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <button class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-gear"></i></button>
                         <ul class="dropdown-menu">
                             <li><a class="dropdown-item edit-payment-details-btn" href="#" data-shop-id="${rem.shop_id}" title="Modifier infos de paiement"><i class="bi bi-pencil"></i> Modifier infos</a></li>
-                            ${isPending ? `<li><a class="dropdown-item pay-btn" href="#" data-remittance-id="${remittanceId}" data-shop-name="${rem.shop_name}" data-amount="${rem.net_amount}"><i class="bi bi-check-circle"></i> Effectuer le versement</a></li>` : ''}
+                            ${isPayable ? `<li><a class="dropdown-item pay-btn" href="#" data-remittance-id="${remittanceId}" data-shop-name="${rem.shop_name}" data-amount="${netAmount}"><i class="bi bi-check-circle"></i> Effectuer le versement</a></li>` : ''}
                         </ul>
                     </div>
                 </td>
@@ -224,13 +231,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (orangeMoneyTransactions) orangeMoneyTransactions.textContent = `${stats.orangeMoneyTransactions} trans.`;
         if (mtnMoneyTotal) mtnMoneyTotal.textContent = formatAmount(stats.mtnMoneyTotal);
         if (mtnMoneyTransactions) mtnMoneyTransactions.textContent = `${stats.mtnMoneyTransactions} trans.`;
-        if (totalRemittanceAmount) totalRemittanceAmount.textContent = formatAmount(stats.totalAmount);
+        
+        if (totalRemittanceAmount) totalRemittanceAmount.textContent = formatAmount(stats.totalAmount); 
         
         const pendingCount = allRemittances.filter(r => r.status === 'pending').length;
         if (totalTransactions) totalTransactions.textContent = `${pendingCount} trans. en attente`;
         
         // Gère l'état du bouton "Tout Payer"
-        bulkPayBtn.disabled = pendingCount === 0;
+        // Le paiement groupé n'est possible que si le montant total net est > 0
+        bulkPayBtn.disabled = pendingCount === 0 || stats.totalAmount <= 0;
     };
      
     /**
@@ -272,7 +281,7 @@ document.addEventListener('DOMContentLoaded', () => {
             payConfirmShopId.value = remittanceId; // Stocker l'ID de la transaction
             
         } else { // Mode Bulk
-            const pending = allRemittances.filter(r => r.status === 'pending');
+            const pending = allRemittances.filter(r => r.status === 'pending' && r.net_amount > 0);
             currentRemittanceSelection = pending;
             confirmShopName.textContent = `${pending.length} Marchands en attente`;
             payConfirmShopId.value = 'BULK_PAYMENT'; 
@@ -294,15 +303,16 @@ document.addEventListener('DOMContentLoaded', () => {
         confirmPayBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Paiement...';
 
         try {
-            const remittancesToPay = currentRemittanceSelection.filter(rem => rem.status === 'pending');
+            // Filtrer à nouveau pour être sûr que seuls les "pending" et > 0 sont envoyés
+            const remittancesToPay = currentRemittanceSelection.filter(rem => rem.status === 'pending' && rem.net_amount > 0);
             let successCount = 0;
             
             if (remittancesToPay.length === 0) {
-                 throw new Error("Aucun versement en attente à traiter.");
+                 throw new Error("Aucun versement en attente à traiter (montant net inférieur ou égal à zéro).");
             }
 
             for (const rem of remittancesToPay) {
-                // Utilise la route /:id/pay pour changer le statut de la transaction dans la table remittances
+                // Utilise la route /:id/pay qui appelle markAsPaid et règle les dettes
                 await axios.put(`${API_BASE_URL}/remittances/${rem.id}/pay`, {
                     userId: CURRENT_USER_ID
                 });
@@ -418,12 +428,31 @@ document.addEventListener('DOMContentLoaded', () => {
         addSafeEventListener(bulkPayBtn, 'click', () => {
              const pending = allRemittances.filter(r => r.status === 'pending');
              const totalAmount = pending.reduce((sum, rem) => sum + rem.net_amount, 0); // Utiliser le net_amount
-             if (pending.length > 0) {
-                 payConfirmShopId.value = 'BULK_PAYMENT'; // Assigner la valeur ici
+             if (pending.length > 0 && totalAmount > 0) { // Protection du montant total négatif
+                 payConfirmShopId.value = 'BULK_PAYMENT'; 
                  openConfirmModal('bulk', totalAmount, `${pending.length} Marchands`);
              }
         }, 'bulkPayBtn');
         
+        // Écouteur pour le bouton "Re-sync"
+        addSafeEventListener(resyncBtn, 'click', async () => {
+            const date = remittanceDateInput.value;
+            if (!date) return showNotification('Veuillez sélectionner une date.', 'warning');
+            
+            resyncBtn.disabled = true;
+            resyncBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Sync...';
+
+            try {
+                await fetchRemittances(date);
+                showNotification('Synchronisation forcée réussie. Les montants sont à jour.', 'info');
+            } catch (error) {
+                showNotification(`Erreur lors de la re-synchronisation.`, 'danger');
+            } finally {
+                resyncBtn.disabled = false;
+                resyncBtn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Re-sync';
+            }
+        }, 'resyncBtn');
+
         // Pagination
         addSafeEventListener(itemsPerPageSelect, 'change', (e) => { itemsPerPage = parseInt(e.target.value); applyPaginationAndRender(); }, 'itemsPerPage');
         addSafeEventListener(firstPageBtn, 'click', (e) => { e.preventDefault(); handlePageChange(1); }, 'firstPage');
