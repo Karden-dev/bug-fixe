@@ -27,12 +27,12 @@ const getRemittances = async (req, res) => {
             orangeMoneyTransactions: 0,
             mtnMoneyTotal: 0,
             mtnMoneyTransactions: 0,
-            totalAmount: 0,
+            totalAmount: 0, // Montant NET total à verser
             totalTransactions: allRemittances.length
         };
 
         allRemittances.forEach(rem => {
-            // On somme uniquement les versements 'pending' pour les stats 'à verser'
+            // On somme uniquement les versements 'pending' pour les stats 'à verser' (Montant NET)
             if (rem.status === 'pending') {
                  if (rem.payment_operator === 'Orange Money') {
                     stats.orangeMoneyTotal += parseFloat(rem.net_amount); // Utilise le montant NET
@@ -70,8 +70,6 @@ const getRemittanceDetails = async (req, res) => {
 
 const recordRemittance = async (req, res) => {
     try {
-        // Cette route n'est plus utilisée dans le nouveau flux pour les versements journaliers, 
-        // mais elle est conservée pour les versements manuels.
         const { shopId, amount, paymentOperator, status, transactionId, remittanceDate, userId } = req.body; 
         if (!shopId || !amount || !status || !userId) {
             return res.status(400).json({ message: "Les champs shopId, amount, status et userId sont requis." });
