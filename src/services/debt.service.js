@@ -1,18 +1,17 @@
 // src/services/debt.service.js
 const moment = require('moment');
-const reportModel = require('../models/report.model');
+// AJOUTÉ: Import du service de bilan pour synchroniser les dettes
+const balanceService = require('./balance.service');
 
 let dbConnection;
 
 const init = (connection) => { 
     dbConnection = connection; 
-    // La ligne conflictuelle ci-dessous est supprimée.
-    // reportModel.init(connection); 
 };
 
 /**
  * Traite les frais de stockage pour les jours non facturés.
- * Met à jour directement la table `daily_shop_balances`.
+ * Met à jour ou crée la ligne dans `daily_shop_balances` si le frais n'a pas été appliqué (total_storage_fees = 0).
  */
 const processStorageFees = async (processingDate) => {
     const connection = await dbConnection.getConnection();
@@ -24,31 +23,39 @@ const processStorageFees = async (processingDate) => {
             `SELECT id, storage_price FROM shops WHERE bill_storage = 1 AND status = 'actif'`
         );
 
-        let updatedCount = 0;
-        let createdCount = 0;
+        let processedCount = 0;
 
         for (const shop of shopsWithStorage) {
-            // 2. Mettre à jour la ligne dans daily_shop_balances pour ce marchand et cette date
-            // On met à jour SEULEMENT si les frais de stockage n'ont pas encore été appliqués (sont à 0)
-            const [result] = await connection.execute(
-                `UPDATE daily_shop_balances 
-                 SET 
-                    total_storage_fees = ?,
-                    remittance_amount = remittance_amount - ?
-                 WHERE 
-                    shop_id = ? 
-                    AND report_date = ?
-                    AND total_storage_fees = 0`,
-                [shop.storage_price, shop.storage_price, shop.id, processingDate]
-            );
+            const storagePrice = parseFloat(shop.storage_price);
+            
+            // ÉTAPE CRUCIALE: Utiliser INSERT... ON DUPLICATE KEY UPDATE
+            const query = `
+                INSERT INTO daily_shop_balances 
+                (report_date, shop_id, total_storage_fees, remittance_amount, status)
+                VALUES (?, ?, ?, ?, 'pending')
+                ON DUPLICATE KEY UPDATE
+                    -- Condition: n'applique le frais que si total_storage_fees était à 0 (évite la double facturation)
+                    remittance_amount = CASE WHEN total_storage_fees = 0 THEN remittance_amount - VALUES(total_storage_fees) ELSE remittance_amount END,
+                    total_storage_fees = CASE WHEN total_storage_fees = 0 THEN VALUES(total_storage_fees) ELSE total_storage_fees END
+            `;
+            
+            const [result] = await connection.execute(query, [
+                processingDate, 
+                shop.id, 
+                storagePrice, 
+                -storagePrice // L'impact du frais de stockage seul
+            ]);
 
+            // Si la ligne a été insérée (1) ou mise à jour (2), on compte le processus et on synchronise les dettes.
             if (result.affectedRows > 0) {
-                updatedCount++;
+                 processedCount++;
+                 // Synchronisation des dettes: Met à jour la table debts si le bilan est passé en négatif.
+                 await balanceService.syncBalanceDebt(connection, shop.id, processingDate);
             }
         }
 
         await connection.commit();
-        return { message: `${updatedCount} bilan(s) mis à jour avec les frais de stockage pour le ${processingDate}.` };
+        return { message: `${processedCount} bilan(s) mis à jour/créés avec les frais de stockage pour le ${processingDate}.` };
     } catch (error) {
         await connection.rollback();
         throw error;
@@ -62,7 +69,6 @@ const processStorageFees = async (processingDate) => {
  * FONCTIONNALITÉ DÉSACTIVÉE.
  */
 const consolidateDailyBalances = async (dateToConsolidate) => {
-    // Cette fonctionnalité est maintenant dépréciée pour simplifier la logique.
     console.log(`[AVERTISSEMENT] La consolidation des soldes pour le ${dateToConsolidate} a été appelée, mais cette fonctionnalité est désactivée.`);
     return { message: `La consolidation automatique des soldes est désactivée.` };
 };
