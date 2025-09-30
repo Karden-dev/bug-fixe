@@ -8,8 +8,8 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
     <style>
         :root {
-            --clr-primary: #FF7F50; 
-            --clr-secondary: #2C3E50; 
+            --clr-primary: #FF7F50;
+            --clr-secondary: #2C3E50;
             --clr-accent: #4A6491;
             --clr-background: #F8F9FA;
             --clr-text: #34495E;
@@ -315,7 +315,7 @@
             </div>
             <div class="card bg-primary-dark stats-card">
                 <div class="card-body py-2">
-                    <h6 class="card-title mb-0">Total à verser</h6>
+                    <h6 class="card-title mb-0">Total Net à verser</h6>
                     <h4 class="card-text mb-0" id="totalRemittanceAmount">0 FCFA</h4>
                     <small id="totalTransactions">0 trans. en attente</small>
                 </div>
@@ -343,6 +343,9 @@
                 <input type="hidden" id="endDateFilter">
                 
                 <div class="ms-auto d-flex gap-2">
+                    <button class="btn btn-sm btn-warning text-nowrap" id="resyncBtn" type="button" title="Forcer la re-synchronisation des créances pour cette date.">
+                        <i class="bi bi-arrow-repeat"></i> Re-sync
+                    </button>
                     <button class="btn btn-sm btn-info" id="exportPdfBtn"><i class="bi bi-file-earmark-pdf"></i> Exporter</button>
                     <button class="btn btn-sm btn-primary-custom" id="bulkPayBtn"><i class="bi bi-cash-stack"></i> Tout Payer</button>
                 </div>
@@ -356,8 +359,8 @@
                             <th>Marchand</th>
                             <th>Infos Versement / Tél.</th>
                             <th>Opérateur</th>
-                            <th class="text-danger">Créances (Ant.)</th>
                             <th class="text-success">Montant Brut à Verser</th>
+                            <th class="text-danger">Créances (Ant.)</th>
                             <th>Montant Net à Verser</th>
                             <th>Statut</th>
                             <th>Actions</th>
