@@ -8,8 +8,8 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
     <style>
         :root {
-            --clr-primary: #FF7F50;
-            --clr-secondary: #2C3E50;
+            --clr-primary: #FF7F50; 
+            --clr-secondary: #2C3E50; 
             --clr-accent: #4A6491;
             --clr-background: #F8F9FA;
             --clr-text: #34495E;
@@ -212,6 +212,12 @@
             border-color: #FF6347; 
             color: white; 
         }
+        
+        /* Custom dropdown action button style */
+        .table .dropdown-menu {
+            min-width: 150px;
+            font-size: 0.85rem;
+        }
 
         /* Notification Toast Style */
         #notification-container {
@@ -320,22 +326,22 @@
             <div class="filter-bar">
                 <div class="input-group input-group-sm" style="max-width: 300px;">
                     <span class="input-group-text"><i class="bi bi-search"></i></span>
-                    <input type="text" class="form-control" id="searchInput" placeholder="Nom, téléphone, ID transaction...">
+                    <input type="text" class="form-control" id="searchInput" placeholder="Nom du marchand...">
                 </div>
                 <div class="input-group input-group-sm" style="max-width: 180px;">
-                    <span class="input-group-text">Du</span>
-                    <input type="date" class="form-control" id="startDateFilter">
+                    <span class="input-group-text"><i class="bi bi-calendar-check"></i> Date Bilan</span>
+                    <input type="date" class="form-control" id="remittanceDate">
                 </div>
-                <div class="input-group input-group-sm" style="max-width: 180px;">
-                    <span class="input-group-text">Au</span>
-                    <input type="date" class="form-control" id="endDateFilter">
-                </div>
+                
                 <select class="form-select form-select-sm" id="statusFilter" style="width: auto;">
-                    <option value="">Tous les statuts</option>
+                    <option value="all">Tous</option>
                     <option value="pending" selected>En attente</option>
                     <option value="paid">Payé</option>
                 </select>
-                <button class="btn btn-sm btn-dark" id="filterBtn"><i class="bi bi-funnel me-1"></i>Filtrer</button>
+                
+                <input type="hidden" id="startDateFilter">
+                <input type="hidden" id="endDateFilter">
+                
                 <div class="ms-auto d-flex gap-2">
                     <button class="btn btn-sm btn-info" id="exportPdfBtn"><i class="bi bi-file-earmark-pdf"></i> Exporter</button>
                     <button class="btn btn-sm btn-primary-custom" id="bulkPayBtn"><i class="bi bi-cash-stack"></i> Tout Payer</button>
@@ -348,11 +354,11 @@
                         <tr>
                             <th>#</th>
                             <th>Marchand</th>
-                            <th>Nom Versement</th>
-                            <th>Téléphone</th>
+                            <th>Infos Versement / Tél.</th>
                             <th>Opérateur</th>
-                            <th>Montant</th>
-                            <th>Date</th>
+                            <th class="text-danger">Créances (Ant.)</th>
+                            <th class="text-success">Montant Brut à Verser</th>
+                            <th>Montant Net à Verser</th>
                             <th>Statut</th>
                             <th>Actions</th>
                         </tr>
@@ -380,6 +386,30 @@
             </div>
         </section>
     </main>
+    
+    <div class="modal fade" id="payConfirmModal" tabindex="-1" aria-labelledby="payConfirmModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-sm">
+            <div class="modal-content">
+                <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title" id="payConfirmModalLabel"><i class="bi bi-cash-stack me-2"></i> Confirmer Versement</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body text-center">
+                    <p class="mb-1">Êtes-vous sûr de vouloir effectuer ce versement ?</p>
+                    <h6 class="fw-bold" id="confirmShopName"></h6>
+                    <h4 class="text-primary fw-bold" id="confirmAmount"></h4>
+                    <p class="text-danger small mt-2">Cette action est IRRÉVERSIBLE et soldera les créances antérieures.</p>
+                    
+                    <input type="hidden" id="payConfirmShopId">
+                    <input type="hidden" id="payConfirmAmount">
+                </div>
+                <div class="modal-footer justify-content-center">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
+                    <button type="button" class="btn btn-success" id="confirmPayBtn"><i class="bi bi-check-circle me-2"></i> Confirmer</button>
+                </div>
+            </div>
+        </div>
+    </div>
     
     <div class="modal fade" id="editPaymentModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
@@ -413,6 +443,16 @@
                         <button type="submit" class="btn btn-primary-custom">Enregistrer</button>
                     </div>
                 </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="detailsModal" tabindex="-1" aria-hidden="true">
+         <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header"><h5 class="modal-title">Détails du Marchand</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                <div class="modal-body" id="detailsModalBody"></div>
+                <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Fermer</button></div>
             </div>
         </div>
     </div>
