@@ -5,12 +5,67 @@ let dbConnection;
 
 const init = (connection) => {
     dbConnection = connection;
+    // CRITICAL FIX: Expose l'objet de connexion pour éviter le TypeError dans le contrôleur.
+    module.exports.dbConnection = connection; 
 };
 
-const findForRemittance = async (filters = {}) => {
-    const { search, startDate, endDate, status } = filters;
-    const params = [];
+/**
+ * Synchronise les soldes positifs du jour de daily_shop_balances
+ * vers la table remittances (UPSERT) en incluant les créances en attente.
+ */
+const syncDailyBalancesToRemittances = async (date, connection) => {
+    // 1. Lire tous les soldes journaliers positifs
+    const [dailyBalances] = await connection.execute(
+        `SELECT
+            dsb.shop_id,
+            dsb.remittance_amount,
+            s.payment_operator
+         FROM daily_shop_balances dsb
+         JOIN shops s ON dsb.shop_id = s.id
+         WHERE dsb.report_date = ? AND dsb.remittance_amount > 0`,
+        [date]
+    );
 
+    for (const balance of dailyBalances) {
+        // 1.5. Calculer la somme des créances en attente (status = 'pending') pour ce marchand.
+        // Ceci est la première ligne de défense contre la double consolidation.
+        const [debtRow] = await connection.execute(
+            `SELECT COALESCE(SUM(amount), 0) AS total_pending_debts 
+             FROM debts 
+             WHERE shop_id = ? AND status = 'pending'`, 
+            [balance.shop_id]
+        );
+        const debtsAmount = parseFloat(debtRow[0]?.total_pending_debts || 0);
+
+        // 2. Tente de créer/mettre à jour l'entrée dans 'remittances' (UPSERT)
+        // La colonne `amount` devient le Montant Brut.
+        await connection.execute(
+            `INSERT INTO remittances 
+                (shop_id, amount, remittance_date, payment_operator, status, user_id, debts_consolidated) 
+             VALUES (?, ?, ?, ?, 'pending', 1, ?) 
+             ON DUPLICATE KEY UPDATE 
+                amount = VALUES(amount), /* Montant Brut */
+                payment_operator = VALUES(payment_operator),
+                debts_consolidated = VALUES(debts_consolidated),
+                remittance_date = VALUES(remittance_date)`,
+            [
+                balance.shop_id,
+                balance.remittance_amount,
+                date,
+                balance.payment_operator || null,
+                debtsAmount // Montant des créances en attente
+            ]
+        );
+    }
+};
+
+/**
+ * Récupère les versements pour l'affichage, AVEC FILTRE PAR STATUT.
+ */
+const findForRemittance = async (filters = {}) => {
+    const { date, status, search } = filters;
+    const params = [];
+    
     let query = `
         SELECT
             r.id,
@@ -18,9 +73,12 @@ const findForRemittance = async (filters = {}) => {
             s.name AS shop_name,
             s.payment_name,
             s.phone_number_for_payment,
-            s.payment_operator, /* CORRECTION: On prend l'opérateur de la table shops */
-            r.amount,
+            s.payment_operator,
+            r.amount AS gross_amount, /* Montant Brut (du bilan) */
+            r.debts_consolidated,     /* Créances consolidées (Dettes Pending) */
+            (r.amount - r.debts_consolidated) AS net_amount, /* Montant Net calculé */
             r.status,
+            r.remittance_date,
             r.payment_date,
             r.transaction_id,
             r.comment,
@@ -28,33 +86,76 @@ const findForRemittance = async (filters = {}) => {
         FROM remittances r
         JOIN shops s ON r.shop_id = s.id
         LEFT JOIN users u ON r.user_id = u.id
+        WHERE 1=1
     `;
-
-    let whereClause = ` WHERE 1=1 `;
-
-    if (search) {
-        whereClause += ` AND (s.name LIKE ? OR s.payment_name LIKE ? OR s.phone_number_for_payment LIKE ?)`;
-        params.push(`%${search}%`, `%${search}%`, `%${search}%`);
-    }
-
-    if (startDate) {
-        whereClause += ` AND r.payment_date >= ?`;
-        params.push(moment(startDate).startOf('day').format('YYYY-MM-DD HH:mm:ss'));
-    }
     
-    if (endDate) {
-        whereClause += ` AND r.payment_date <= ?`;
-        params.push(moment(endDate).endOf('day').format('YYYY-MM-DD HH:mm:ss'));
+    // Filtrage par date journalière
+    if (date) {
+        query += ` AND r.remittance_date = ?`;
+        params.push(date);
     }
-    
-    if (status) {
-        whereClause += ` AND r.status = ?`;
+
+    // Filtrage par statut (le nouveau filtre frontend)
+    if (status && status !== 'all') {
+        query += ` AND r.status = ?`;
         params.push(status);
     }
 
-    query += whereClause + ` ORDER BY r.payment_date DESC`;
+    // Recherche par mot-clé
+    if (search) {
+        query += ` AND (s.name LIKE ? OR s.payment_name LIKE ? OR s.phone_number_for_payment LIKE ?)`;
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+
+    query += ` ORDER BY r.status DESC, s.name ASC`;
     const [rows] = await dbConnection.execute(query, params);
-    return rows;
+
+    // Formatter les montants
+    return rows.map(row => ({
+        ...row,
+        gross_amount: parseFloat(row.gross_amount || 0),
+        debts_consolidated: parseFloat(row.debts_consolidated || 0),
+        net_amount: parseFloat(row.net_amount || 0)
+    }));
+};
+
+/**
+ * Marque un versement comme payé et règle TOUTES les créances en attente associées.
+ */
+const markAsPaid = async (remittanceId, userId) => {
+    const connection = await dbConnection.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        // 1. Mettre à jour le statut du versement dans 'remittances'
+        const [remittanceRow] = await connection.execute('SELECT shop_id, net_amount FROM remittances WHERE id = ?', [remittanceId]);
+        if (remittanceRow.length === 0) {
+            throw new Error('Versement non trouvé.');
+        }
+        const shopId = remittanceRow[0].shop_id;
+
+        const [updateResult] = await connection.execute(
+            'UPDATE remittances SET status = ?, payment_date = CURDATE(), user_id = ? WHERE id = ? AND status = ?',
+            ['paid', userId, remittanceId, 'pending']
+        );
+        
+        // 2. RÉGLER (passer à 'paid') TOUTES les créances EN ATTENTE pour ce marchand.
+        // C'est cette action qui empêche la double consolidation.
+        if (updateResult.affectedRows > 0) {
+            await connection.execute(
+                'UPDATE debts SET status = "paid", settled_at = NOW(), updated_by = ? WHERE shop_id = ? AND status = "pending"', 
+                [userId, shopId]
+            );
+        }
+
+        await connection.commit();
+        return updateResult;
+    } catch (error) {
+        await connection.rollback();
+        throw error;
+    } finally {
+        connection.release();
+    }
 };
 
 const getShopDetails = async (shopId) => {
@@ -90,40 +191,17 @@ const updateShopPaymentDetails = async (shopId, paymentData) => {
 };
 
 const recordRemittance = async (shopId, amount, paymentOperator, status, transactionId = null, comment = null, userId) => {
-    const query = 'INSERT INTO remittances (shop_id, amount, payment_date, payment_operator, status, transaction_id, comment, user_id) VALUES (?, ?, CURDATE(), ?, ?, ?, ?, ?)';
+    // Cette fonction est utilisée pour insérer de nouveaux versements dans la table remittances.
+    const query = 'INSERT INTO remittances (shop_id, amount, remittance_date, payment_operator, status, transaction_id, comment, user_id) VALUES (?, ?, CURDATE(), ?, ?, ?, ?, ?)';
     const [result] = await dbConnection.execute(query, [shopId, amount, paymentOperator, status, transactionId, comment, userId]);
     return result;
 };
 
-const markAsPaid = async (remittanceId, userId) => {
-    const connection = await dbConnection.getConnection();
-    try {
-        await connection.beginTransaction();
-        const [rows] = await connection.execute('SELECT shop_id FROM remittances WHERE id = ?', [remittanceId]);
-        if (rows.length === 0) {
-            throw new Error('Versement non trouvé.');
-        }
-        const shopId = rows[0].shop_id;
-        const [updateResult] = await connection.execute(
-            'UPDATE remittances SET status = ?, updated_at = NOW(), user_id = ? WHERE id = ? AND status = ?',
-            ['paid', userId, remittanceId, 'pending']
-        );
-        if (updateResult.affectedRows > 0) {
-            await connection.execute('UPDATE debts SET status = "paid", settled_at = NOW(), updated_by = ? WHERE shop_id = ? AND status = "pending"', [userId, shopId]);
-        }
-        await connection.commit();
-        return updateResult;
-    } catch (error) {
-        await connection.rollback();
-        throw error;
-    } finally {
-        connection.release();
-    }
-};
 
 module.exports = {
     init,
     findForRemittance,
+    syncDailyBalancesToRemittances, 
     getShopDetails,
     updateShopPaymentDetails,
     recordRemittance,
