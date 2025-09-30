@@ -2,7 +2,7 @@
 
 document.addEventListener('DOMContentLoaded', () => {
     // --- CONFIGURATION ---
-    const API_BASE_URL = 'https://app.winkexpress.online';
+    const API_BASE_URL = 'http://localhost:3000';
     const CURRENT_USER_ID = 1; // À remplacer par l'ID de l'utilisateur connecté
 
     // --- CACHES & ÉTAT ---
@@ -10,51 +10,56 @@ document.addEventListener('DOMContentLoaded', () => {
     let paginatedRemittances = [];
     let currentPage = 1;
     let itemsPerPage = 25;
+    let currentRemittanceSelection = []; // Contient l'objet du marchand pour l'individuel ou un tableau pour le groupé.
 
     // --- RÉFÉRENCES DOM ---
     const remittanceTableBody = document.getElementById('remittanceTableBody');
     const searchInput = document.getElementById('searchInput');
-    const startDateFilter = document.getElementById('startDateFilter');
-    const endDateFilter = document.getElementById('endDateFilter');
+    const remittanceDateInput = document.getElementById('remittanceDate');
     const statusFilter = document.getElementById('statusFilter');
-    const filterBtn = document.getElementById('filterBtn');
-    const exportPdfBtn = document.getElementById('exportPdfBtn');
+    
+    // Éléments de pagination et de stats
+    const itemsPerPageSelect = document.getElementById('itemsPerPage');
+    const paginationInfo = document.getElementById('paginationInfo');
+    const currentPageDisplay = document.getElementById('currentPageDisplay');
+    const firstPageBtn = document.getElementById('firstPage');
+    const prevPageBtn = document.getElementById('prevPage');
+    const nextPageBtn = document.getElementById('nextPage');
+    const lastPageBtn = document.getElementById('lastPage');
     const bulkPayBtn = document.getElementById('bulkPayBtn');
-    const orangeMoneyTotal = document.getElementById('orangeMoneyTotal');
-    const orangeMoneyTransactions = document.getElementById('orangeMoneyTransactions');
-    const mtnMoneyTotal = document.getElementById('mtnMoneyTotal');
-    const mtnMoneyTransactions = document.getElementById('mtnMoneyTransactions');
-    const totalRemittanceAmount = document.getElementById('totalRemittanceAmount');
-    const totalTransactions = document.getElementById('totalTransactions');
+    
+    // Références Modales
     const editPaymentModal = new bootstrap.Modal(document.getElementById('editPaymentModal'));
+    const payConfirmModal = new bootstrap.Modal(document.getElementById('payConfirmModal'));
     const editPaymentForm = document.getElementById('editPaymentForm');
+    const confirmPayBtn = document.getElementById('confirmPayBtn');
+    
+    // Références pour la modale de confirmation
+    const confirmShopName = document.getElementById('confirmShopName');
+    const confirmAmount = document.getElementById('confirmAmount');
+    const payConfirmShopId = document.getElementById('payConfirmShopId');
+    const payConfirmAmount = document.getElementById('payConfirmAmount');
+    
+    // Références pour l'édition des infos de paiement
     const editShopIdInput = document.getElementById('editShopId');
     const paymentNameInput = document.getElementById('paymentNameInput');
     const phoneNumberInput = document.getElementById('phoneNumberInput');
     const paymentOperatorSelect = document.getElementById('paymentOperatorSelect');
-    const itemsPerPageSelect = document.getElementById('itemsPerPage');
-    const paginationInfo = document.getElementById('paginationInfo');
-    const firstPageBtn = document.getElementById('firstPage');
-    const prevPageBtn = document.getElementById('prevPage');
-    const currentPageDisplay = document.getElementById('currentPageDisplay');
-    const nextPageBtn = document.getElementById('nextPage');
-    const lastPageBtn = document.getElementById('lastPage');
+    
+    // Placeholders pour les filtres masqués (pour la compatibilité)
+    const startDateFilter = document.getElementById('startDateFilter');
+    const endDateFilter = document.getElementById('endDateFilter');
 
     // --- TRADUCTIONS ET COULEURS ---
     const statusTranslations = { 'pending': 'En attente', 'paid': 'Payé' };
     const statusColors = { 'pending': 'status-pending', 'paid': 'status-paid' };
     const paymentOperatorsColors = {
-        'Orange Money': 'bg-orange-money-dot', // Correction de la classe
-        'MTN Mobile Money': 'bg-mtn-money-dot' // Correction de la classe
+        'Orange Money': 'bg-orange-money-dot',
+        'MTN Mobile Money': 'bg-mtn-money-dot'
     };
 
     // --- FONCTIONS UTILITAIRES ---
     
-    /**
-     * Affiche une notification toast stylisée.
-     * @param {string} message - Le message à afficher.
-     * @param {string} [type='success'] - Le type d'alerte (success, danger, warning, info).
-     */
     const showNotification = (message, type = 'success') => {
         const container = document.getElementById('notification-container');
         if (!container) return;
@@ -62,53 +67,54 @@ document.addEventListener('DOMContentLoaded', () => {
         alert.className = `alert alert-${type} alert-dismissible fade show`;
         alert.innerHTML = `${message}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>`;
         container.appendChild(alert);
-         
-        // Fermeture automatique pour l'effet "toast"
         setTimeout(() => {
             const bsAlert = bootstrap.Alert.getOrCreateInstance(alert);
             bsAlert.close();
         }, 4000); 
     };
 
-    /**
-     * Ajoute un écouteur d'événement de manière sécurisée (vérifie l'existence de l'élément).
-     * @param {HTMLElement} element - L'élément DOM.
-     * @param {string} event - Le nom de l'événement.
-     * @param {Function} handler - La fonction de gestion de l'événement.
-     * @param {string} elementId - L'ID de l'élément pour le logging.
-     */
     const addSafeEventListener = (element, event, handler, elementId) => {
         if (element) {
             element.addEventListener(event, handler);
-        } else {
-            // console.warn(`WinkDev Assistant: L'élément avec l'ID '#${elementId}' n'a pas été trouvé.`);
         }
     };
      
-    /**
-     * Formate un montant en FCFA avec séparateur de milliers.
-     * @param {number|string} amount - Le montant à formater.
-     * @returns {string} Le montant formaté.
-     */
     const formatAmount = (amount) => {
         return parseFloat(amount || 0).toLocaleString('fr-FR') + ' FCFA';
     };
+    
+    const formatPhoneNumber = (phone) => {
+        if (!phone) return 'N/A';
+        const cleaned = ('' + phone).replace(/\D/g, '');
+        const match = cleaned.match(/^(\d{1})(\d{2})(\d{2})(\d{2})(\d{2})$/);
+        if (match) {
+            return `<strong>${match[1]} ${match[2]} ${match[3]} ${match[4]} ${match[5]}</strong>`;
+        }
+        return `<strong>${phone}</strong>`;
+    };
+
 
     // --- FONCTIONS PRINCIPALES ---
      
     /**
-     * Récupère les versements depuis l'API en appliquant les filtres.
+     * Récupère les versements (et synchronise d'abord si la date est définie).
      */
     const fetchRemittances = async () => {
         try {
-            const params = {
-                search: searchInput.value,
-                status: statusFilter.value
-            };
-            if (startDateFilter.value) params.startDate = startDateFilter.value;
-            if (endDateFilter.value) params.endDate = endDateFilter.value;
+            const params = {};
+            const date = remittanceDateInput.value;
+            
+            if (!date) {
+                 remittanceTableBody.innerHTML = `<tr><td colspan="9" class="text-center p-3">Veuillez sélectionner une date de bilan.</td></tr>`;
+                 updateStatsCards({ orangeMoneyTotal: 0, orangeMoneyTransactions: 0, mtnMoneyTotal: 0, mtnMoneyTransactions: 0, totalAmount: 0 });
+                 return;
+            }
+            
+            // Filtres envoyés au contrôleur (synchronise la date en cours, puis filtre par statut)
+            params.date = date;
+            params.search = searchInput.value;
+            params.status = statusFilter.value;
 
-            // CORRECTION: Revert vers le chemin sans /api
             const response = await axios.get(`${API_BASE_URL}/remittances`, { params });
             allRemittances = response.data.remittances;
             updateStatsCards(response.data.stats);
@@ -117,8 +123,9 @@ document.addEventListener('DOMContentLoaded', () => {
             applyPaginationAndRender();
         } catch (error) {
             console.error("Erreur fetchRemittances:", error);
-            remittanceTableBody.innerHTML = `<tr><td colspan="9" class="text-center text-danger">Erreur de chargement.</td></tr>`;
-            showNotification("Erreur lors du chargement des versements.", "danger");
+            const errorMessage = error.response?.data?.message || "Erreur de chargement.";
+            remittanceTableBody.innerHTML = `<tr><td colspan="9" class="text-center text-danger">${errorMessage}</td></tr>`;
+            showNotification(errorMessage, "danger");
         }
     };
 
@@ -141,14 +148,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /**
      * Génère et affiche les lignes du tableau des versements.
-     * @param {Array<Object>} remittances - Liste des versements à afficher pour la page courante.
      */
     const renderRemittanceTable = (remittances) => {
         if (!remittanceTableBody) return;
         remittanceTableBody.innerHTML = '';
          
         if (remittances.length === 0) {
-            remittanceTableBody.innerHTML = `<tr><td colspan="9" class="text-center p-3">Aucun versement à afficher.</td></tr>`;
+            remittanceTableBody.innerHTML = `<tr><td colspan="9" class="text-center p-3">Aucun versement à afficher pour les filtres sélectionnés.</td></tr>`;
             return;
         }
          
@@ -159,17 +165,30 @@ document.addEventListener('DOMContentLoaded', () => {
             const operatorColor = paymentOperatorsColors[rem.payment_operator] || 'bg-secondary';
             const statusColor = statusColors[rem.status] || 'bg-secondary';
             const isPending = rem.status === 'pending';
+            
+            // Colonne fusionnée : Nom Versement (Téléphone en gras)
+            const remittanceInfo = `
+                ${rem.payment_name || 'N/A'}
+                <br>
+                ${formatPhoneNumber(rem.phone_number_for_payment)}
+            `;
+            
+            // Montants et Créances (nouvelles colonnes)
+            const debtsAmount = formatAmount(rem.debts_consolidated || 0); // Créances consolidées
+            const grossAmount = formatAmount(rem.gross_amount || 0);
+            const netAmount = formatAmount(rem.net_amount || 0);
 
-            const paymentDate = moment(rem.payment_date).isValid() ? moment(rem.payment_date).format('DD/MM/YYYY') : 'Date Inconnue';
+            // L'ID du versement est l'ID de la ligne dans la table 'remittances' (r.id)
+            const remittanceId = rem.id; 
 
             row.innerHTML = `
                 <td>${startIndex + index + 1}</td>
                 <td>${rem.shop_name}</td>
-                <td>${rem.payment_name || 'N/A'}</td>
-                <td>${rem.phone_number_for_payment || 'N/A'}</td>
+                <td>${remittanceInfo}</td>
                 <td>${rem.payment_operator ? `<span class="operator-dot ${operatorColor}"></span>` : ''} ${rem.payment_operator || 'N/A'}</td>
-                <td class="fw-bold">${formatAmount(rem.amount)}</td>
-                <td>${paymentDate}</td>
+                <td class="text-danger fw-bold">${debtsAmount}</td>
+                <td class="text-success fw-bold">${grossAmount}</td>
+                <td class="fw-bold">${netAmount}</td>
                 <td>
                     <span class="status-badge-container">
                         <span class="status-dot ${statusColor}"></span>
@@ -177,9 +196,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     </span>
                 </td>
                 <td>
-                    <div class="btn-group btn-group-sm">
-                        <button class="btn btn-outline-primary edit-btn" data-shop-id="${rem.shop_id}" title="Modifier infos de paiement"><i class="bi bi-pencil"></i></button>
-                        ${isPending ? `<button class="btn btn-outline-success pay-btn" data-id="${rem.shop_id}" title="Marquer comme Payé"><i class="bi bi-check-circle"></i></button>` : ''}
+                    <div class="dropdown">
+                        <button class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-gear"></i></button>
+                        <ul class="dropdown-menu">
+                            <li><a class="dropdown-item edit-payment-details-btn" href="#" data-shop-id="${rem.shop_id}" title="Modifier infos de paiement"><i class="bi bi-pencil"></i> Modifier infos</a></li>
+                            ${isPending ? `<li><a class="dropdown-item pay-btn" href="#" data-remittance-id="${remittanceId}" data-shop-name="${rem.shop_name}" data-amount="${rem.net_amount}"><i class="bi bi-check-circle"></i> Effectuer le versement</a></li>` : ''}
+                        </ul>
                     </div>
                 </td>
             `;
@@ -189,17 +211,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /**
      * Met à jour les cartes de statistiques en haut de page.
-     * @param {Object} stats - Les statistiques agrégées.
      */
     const updateStatsCards = (stats) => {
+        const orangeMoneyTotal = document.getElementById('orangeMoneyTotal');
+        const orangeMoneyTransactions = document.getElementById('orangeMoneyTransactions');
+        const mtnMoneyTotal = document.getElementById('mtnMoneyTotal');
+        const mtnMoneyTransactions = document.getElementById('mtnMoneyTransactions');
+        const totalRemittanceAmount = document.getElementById('totalRemittanceAmount');
+        const totalTransactions = document.getElementById('totalTransactions');
+        
         if (orangeMoneyTotal) orangeMoneyTotal.textContent = formatAmount(stats.orangeMoneyTotal);
         if (orangeMoneyTransactions) orangeMoneyTransactions.textContent = `${stats.orangeMoneyTransactions} trans.`;
         if (mtnMoneyTotal) mtnMoneyTotal.textContent = formatAmount(stats.mtnMoneyTotal);
         if (mtnMoneyTransactions) mtnMoneyTransactions.textContent = `${stats.mtnMoneyTransactions} trans.`;
         if (totalRemittanceAmount) totalRemittanceAmount.textContent = formatAmount(stats.totalAmount);
-         
+        
         const pendingCount = allRemittances.filter(r => r.status === 'pending').length;
         if (totalTransactions) totalTransactions.textContent = `${pendingCount} trans. en attente`;
+        
+        // Gère l'état du bouton "Tout Payer"
+        bulkPayBtn.disabled = pendingCount === 0;
     };
      
     /**
@@ -220,7 +251,6 @@ document.addEventListener('DOMContentLoaded', () => {
      
     /**
      * Gère le changement de page dans les contrôles de pagination.
-     * @param {number} newPage - La nouvelle page à afficher.
      */
     const handlePageChange = (newPage) => {
         const totalPages = Math.ceil(allRemittances.length / itemsPerPage);
@@ -230,55 +260,106 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     /**
-     * Gère les actions sur les boutons du tableau (Modifier, Payer).
-     * @param {Event} e - L'événement de clic.
+     * Ouvre la modale de confirmation pour un versement (individuel ou groupé).
+     */
+    const openConfirmModal = (mode, totalAmount, shopName, remittanceId = null) => {
+        currentRemittanceSelection = []; 
+        
+        if (mode === 'individual') {
+            const remittance = allRemittances.find(r => r.id == remittanceId);
+            currentRemittanceSelection = [remittance];
+            confirmShopName.textContent = `Marchand: ${shopName}`;
+            payConfirmShopId.value = remittanceId; // Stocker l'ID de la transaction
+            
+        } else { // Mode Bulk
+            const pending = allRemittances.filter(r => r.status === 'pending');
+            currentRemittanceSelection = pending;
+            confirmShopName.textContent = `${pending.length} Marchands en attente`;
+            payConfirmShopId.value = 'BULK_PAYMENT'; 
+        }
+        
+        confirmAmount.textContent = formatAmount(totalAmount);
+        payConfirmAmount.value = totalAmount;
+        payConfirmModal.show();
+    };
+    
+    /**
+     * Gère la confirmation de paiement depuis la modale (Individuel ou Groupé).
+     */
+    const handleConfirmPayment = async () => {
+        const targetId = payConfirmShopId.value;
+        const isBulk = targetId === 'BULK_PAYMENT';
+
+        confirmPayBtn.disabled = true;
+        confirmPayBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Paiement...';
+
+        try {
+            const remittancesToPay = currentRemittanceSelection.filter(rem => rem.status === 'pending');
+            let successCount = 0;
+            
+            if (remittancesToPay.length === 0) {
+                 throw new Error("Aucun versement en attente à traiter.");
+            }
+
+            for (const rem of remittancesToPay) {
+                // Utilise la route /:id/pay pour changer le statut de la transaction dans la table remittances
+                await axios.put(`${API_BASE_URL}/remittances/${rem.id}/pay`, {
+                    userId: CURRENT_USER_ID
+                });
+                successCount++;
+            }
+            
+            const message = isBulk 
+                ? `${successCount} versement(s) marqué(s) comme payé(s) !`
+                : `Versement pour ${remittancesToPay[0].shop_name} marqué comme payé.`;
+            showNotification(message, 'success');
+
+        } catch (error) {
+            showNotification(error.response?.data?.message || 'Erreur lors du changement de statut.', 'danger');
+        } finally {
+            payConfirmModal.hide();
+            confirmPayBtn.disabled = false;
+            confirmPayBtn.innerHTML = '<i class="bi bi-check-circle me-2"></i> Confirmer';
+            fetchRemittances();
+        }
+    };
+
+    /**
+     * Gère les actions sur les lignes du tableau (Paiement, Modification des détails).
      */
     const handleTableActions = async (e) => {
-        const target = e.target.closest('button');
+        const target = e.target.closest('a');
         if (!target) return;
-         
-        if (target.classList.contains('edit-btn')) {
-            const shopId = target.dataset.shopId;
+
+        const shopId = target.dataset.shopId;
+        const remittanceId = target.dataset.remittanceId;
+        
+        if (target.classList.contains('edit-payment-details-btn')) {
             try {
-                // CORRECTION: Retrait du préfixe /api
+                // Ouvre la modale d'édition.
                 const { data: shop } = await axios.get(`${API_BASE_URL}/shops/${shopId}`);
                 editShopIdInput.value = shop.id;
                 paymentNameInput.value = shop.payment_name || '';
                 phoneNumberInput.value = shop.phone_number_for_payment || '';
                 paymentOperatorSelect.value = shop.payment_operator || '';
+                
+                document.getElementById('editPaymentModal').querySelector('.modal-title').textContent = `Modifier infos de ${shop.name}`;
                 editPaymentModal.show();
             } catch (error) { 
-                showNotification("Impossible de charger les détails.", "danger"); 
+                showNotification("Impossible de charger les détails de paiement.", "danger"); 
             }
         } else if (target.classList.contains('pay-btn')) {
-            // Rétablissement de la logique POST /record pour le paiement individuel
-            const shopId = target.dataset.id; 
-            const remittance = allRemittances.find(r => r.shop_id == shopId); 
+            const shopName = target.dataset.shopName;
+            const amount = parseFloat(target.dataset.amount);
             
-            if (!remittance || remittance.amount <= 0) return showNotification("Erreur: Solde nul ou versement non trouvé.", "danger");
-            
-            if (confirm(`Confirmer le versement de ${formatAmount(remittance.amount)} à ${remittance.shop_name} ?`)) {
-                try {
-                    // CORRECTION: Utilisation du chemin sans /api
-                    await axios.post(`${API_BASE_URL}/remittances/record`, {
-                        shopId: remittance.shop_id,
-                        amount: remittance.amount,
-                        paymentOperator: remittance.payment_operator,
-                        status: 'paid', // Paiement complet
-                        userId: CURRENT_USER_ID
-                    });
-                    showNotification('Versement enregistré et créances soldées !');
-                    fetchRemittances();
-                } catch (error) {
-                    showNotification(error.response?.data?.message || 'Erreur lors de l\'enregistrement du versement.', 'danger');
-                }
-            }
+            // Paiement individuel : Ouvre la modale de confirmation
+            payConfirmShopId.value = remittanceId; // Stocker l'ID de la transaction dans remittances
+            openConfirmModal('individual', amount, shopName, remittanceId);
         }
     };
-     
+    
     /**
      * Gère la soumission du formulaire de modification des infos de paiement du marchand.
-     * @param {Event} e - L'événement de soumission.
      */
     const handleEditPaymentSubmit = async (e) => {
         e.preventDefault();
@@ -289,98 +370,67 @@ document.addEventListener('DOMContentLoaded', () => {
             payment_operator: paymentOperatorSelect.value 
         };
         try {
-            // CORRECTION: Retrait du préfixe /api
             await axios.put(`${API_BASE_URL}/remittances/shop-details/${shopId}`, paymentData);
             showNotification("Informations mises à jour !");
             editPaymentModal.hide();
-            await fetchRemittances();
+            await fetchRemittances(); // Recharger pour voir les changements dans le tableau
         } catch (error) { 
             showNotification("Erreur de mise à jour.", "danger"); 
         }
     };
-     
-    /**
-     * Gère le paiement groupé de tous les versements en attente.
-     */
-    const handleBulkPay = async () => {
-        const pendingRemittances = allRemittances.filter(r => r.status === 'pending');
-        if (pendingRemittances.length === 0) return showNotification('Aucun versement en attente.', 'info');
-         
-        if (confirm(`Confirmer le paiement de ${pendingRemittances.length} versements ?`)) {
-            try {
-                // CORRECTION: Utilisation du chemin sans /api pour le paiement groupé
-                const promises = pendingRemittances.map(rem => 
-                    axios.post(`${API_BASE_URL}/remittances/record`, {
-                        shopId: rem.shop_id,
-                        amount: rem.amount,
-                        paymentOperator: rem.payment_operator,
-                        status: 'paid',
-                        userId: CURRENT_USER_ID
-                    })
-                );
-                await Promise.all(promises);
-                showNotification(`${pendingRemittances.length} versements ont été payés.`);
-                fetchRemittances();
-            } catch (error) { 
-                showNotification("Erreur lors du paiement groupé.", "danger"); 
-            }
-        }
-    };
 
-    /**
-     * Point d'entrée de l'application, initialise les écouteurs et le chargement des données.
-     */
+
+    // --- INITIALISATION ---
     const initializeApp = () => {
-        // Définir les filtres par défaut
-        if (startDateFilter) startDateFilter.value = '';
-        if (endDateFilter) endDateFilter.value = '';
-        if (statusFilter) statusFilter.value = "pending";
+        const today = new Date().toISOString().slice(0, 10);
+        const sidebar = document.getElementById('sidebar');
+        const mainContent = document.getElementById('main-content');
+        const sidebarToggler = document.getElementById('sidebar-toggler');
+        const logoutBtn = document.getElementById('logoutBtn');
+        
+        if (remittanceDateInput) remittanceDateInput.value = today;
+        if (statusFilter) statusFilter.value = "pending"; // Filtre par défaut 'En attente'
         if (itemsPerPageSelect) itemsPerPage = parseInt(itemsPerPageSelect.value);
 
-        // --- Écouteurs d'événements ---
-         
-        // Sidebar et déconnexion
-        addSafeEventListener(document.getElementById('sidebar-toggler'), 'click', () => {
-            document.getElementById('sidebar')?.classList.toggle('collapsed');
-            document.getElementById('main-content')?.classList.toggle('expanded');
+        // --- Gestion du menu latéral (Bouton Hamburger) ---
+        addSafeEventListener(sidebarToggler, 'click', () => {
+            sidebar?.classList.toggle('collapsed');
+            mainContent?.classList.toggle('expanded');
         }, 'sidebar-toggler');
-         
-        addSafeEventListener(document.getElementById('logoutBtn'), 'click', () => { 
+        
+        addSafeEventListener(logoutBtn, 'click', () => { 
             localStorage.removeItem('user');
             sessionStorage.removeItem('user');
             window.location.href = 'index.html'; 
         }, 'logoutBtn');
-         
-        // Mise en évidence du lien actif (dropdown parent)
-        document.querySelectorAll('.nav-link').forEach(link => {
-            if (link.getAttribute('href') === 'remittances.html') {
-                const parentDropdown = link.closest('.dropdown');
-                if (parentDropdown) parentDropdown.querySelector('.dropdown-toggle').classList.add('active');
-            }
-        });
 
-
-        // Filtres et recherche
-        addSafeEventListener(filterBtn, 'click', fetchRemittances, 'filterBtn');
+        // Écouteurs pour le filtre (automatique) et la recherche (déclenche fetchRemittances)
+        addSafeEventListener(remittanceDateInput, 'change', fetchRemittances, 'remittanceDate');
         addSafeEventListener(searchInput, 'input', fetchRemittances, 'searchInput');
-        addSafeEventListener(startDateFilter, 'change', fetchRemittances, 'startDateFilter');
-        addSafeEventListener(endDateFilter, 'change', fetchRemittances, 'endDateFilter');
         addSafeEventListener(statusFilter, 'change', fetchRemittances, 'statusFilter');
-         
-        // Actions de la table
         addSafeEventListener(remittanceTableBody, 'click', handleTableActions, 'remittanceTableBody');
+        
+        // Écouteurs Modale
         addSafeEventListener(editPaymentForm, 'submit', handleEditPaymentSubmit, 'editPaymentForm');
-        addSafeEventListener(bulkPayBtn, 'click', handleBulkPay, 'bulkPayBtn');
-        // CORRECTION: Retrait du préfixe /api
-        addSafeEventListener(exportPdfBtn, 'click', () => window.open(`${API_BASE_URL}/remittances/export-pdf`), 'exportPdfBtn');
-         
+        addSafeEventListener(confirmPayBtn, 'click', handleConfirmPayment, 'confirmPayBtn');
+        
+        // Écouteur pour le bouton "Tout Payer"
+        addSafeEventListener(bulkPayBtn, 'click', () => {
+             const pending = allRemittances.filter(r => r.status === 'pending');
+             const totalAmount = pending.reduce((sum, rem) => sum + rem.net_amount, 0); // Utiliser le net_amount
+             if (pending.length > 0) {
+                 payConfirmShopId.value = 'BULK_PAYMENT'; // Assigner la valeur ici
+                 openConfirmModal('bulk', totalAmount, `${pending.length} Marchands`);
+             }
+        }, 'bulkPayBtn');
+        
         // Pagination
+        addSafeEventListener(itemsPerPageSelect, 'change', (e) => { itemsPerPage = parseInt(e.target.value); applyPaginationAndRender(); }, 'itemsPerPage');
         addSafeEventListener(firstPageBtn, 'click', (e) => { e.preventDefault(); handlePageChange(1); }, 'firstPage');
         addSafeEventListener(prevPageBtn, 'click', (e) => { e.preventDefault(); handlePageChange(currentPage - 1); }, 'prevPage');
         addSafeEventListener(nextPageBtn, 'click', (e) => { e.preventDefault(); handlePageChange(currentPage + 1); }, 'nextPage');
         addSafeEventListener(lastPageBtn, 'click', (e) => { e.preventDefault(); handlePageChange(Math.ceil(allRemittances.length / itemsPerPage)); }, 'lastPage');
-        addSafeEventListener(itemsPerPageSelect, 'change', (e) => { itemsPerPage = parseInt(e.target.value); applyPaginationAndRender(); }, 'itemsPerPage');
-         
+        
         // Lancement du chargement initial
         fetchRemittances();
     };
