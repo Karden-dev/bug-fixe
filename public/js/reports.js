@@ -1,7 +1,7 @@
 // js/reports.js
 document.addEventListener('DOMContentLoaded', async () => {
     // Note: Utilisation de 'test.winkexpress.online' pour la cohérence avec le reste des fichiers fournis.
-    const API_BASE_URL = 'https://app.winkexpress.online';
+    const API_BASE_URL = 'http://localhost:3000';
 
     // --- RÉFÉRENCES DOM ---
     const reportDateInput = document.getElementById('reportDate');
@@ -25,6 +25,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const logoutBtn = document.getElementById('logoutBtn');
     const processStorageBtn = document.getElementById('processStorageBtn');
     const recalculateBtn = document.getElementById('recalculateBtn');
+    const exportPdfBtn = document.getElementById('exportPdfBtn');
     
     // Références DOM pour la modale de confirmation
     const recalculateConfirmModal = new bootstrap.Modal(document.getElementById('recalculateConfirmModal'));
@@ -110,7 +111,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 <td>${report.total_orders_delivered || 0}</td>
                 <td class="text-end">${formatAmount(report.total_revenue_articles)}</td>
                 <td class="text-end">${formatAmount(report.total_delivery_fees)}</td>
-                <td class="text-end">${formatAmount(report.expedition_fee || 0)}</td>
+                <td class="text-end">${formatAmount(report.total_expedition_fees || 0)}</td>
                 <td class="text-end">${formatAmount(report.total_packaging_fees)}</td>
                 <td class="text-end">${formatAmount(report.total_storage_fees)}</td>
                 <td class="text-end ${amountToRemitClass}">${formatAmount(report.amount_to_remit)}</td>
@@ -261,6 +262,20 @@ document.addEventListener('DOMContentLoaded', async () => {
                 processStorageBtn.disabled = false;
                 processStorageBtn.innerHTML = '<i class="bi bi-box-seam"></i> Traiter le stockage';
             }
+        });
+    }
+
+    // Événement pour le bouton "Exporter PDF"
+    if (exportPdfBtn) {
+        exportPdfBtn.addEventListener('click', () => {
+            const date = reportDateInput.value;
+            if (!date) return showNotification('Veuillez sélectionner une date.', 'warning');
+            
+            // Ouvre l'export PDF dans un nouvel onglet
+            const url = `${API_BASE_URL}/reports/export-pdf?date=${date}`;
+            window.open(url, '_blank');
+            
+            showNotification('Génération du PDF lancée.', 'info');
         });
     }
 
