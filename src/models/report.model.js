@@ -30,9 +30,11 @@ module.exports = {
             `;
             const [rows] = await connection.execute(query, [date]);
             
+            // CORRECTION APPLIQUÉE ICI
             return rows.map(row => ({ 
                 ...row, 
-                amount_to_remit: row.remittance_amount 
+                amount_to_remit: row.remittance_amount,
+                expedition_fee: row.total_expedition_fees // <-- La ligne qui corrige le bug
             }));
         } finally {
             connection.release();
