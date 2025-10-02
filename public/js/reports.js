@@ -5,7 +5,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // --- RÉFÉRENCES DOM ---
     const reportDateInput = document.getElementById('reportDate');
-    const searchMerchantInput = document.getElementById('searchMerchantInput');
+    const searchMerchantInput = document.getElementById('searchInput');
     const reportsTableBody = document.getElementById('reportsTableBody');
     const totalRemittanceAmount = document.getElementById('totalRemittanceAmount');
     const totalPackagingAmount = document.getElementById('totalPackagingAmount');
@@ -103,6 +103,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             const rank = startIndex + index + 1;
             const amountToRemitClass = report.amount_to_remit < 0 ? 'text-danger fw-bold' : 'text-success fw-bold';
             
+            // Correction: Utilisation de `report.total_expedition_fees` (tel que retourné par le modèle) 
+            // et alignement des colonnes pour correspondre aux 11 colonnes du <thead>.
+            const expeditionFeeDisplay = formatAmount(report.total_expedition_fees || 0);
+
             row.innerHTML = `
                 <td>${rank}.</td>
                 <td>${report.shop_name}</td>
@@ -110,7 +114,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 <td>${report.total_orders_delivered || 0}</td>
                 <td class="text-end">${formatAmount(report.total_revenue_articles)}</td>
                 <td class="text-end">${formatAmount(report.total_delivery_fees)}</td>
-                <td class="text-end">${formatAmount(report.expedition_fee || 0)}</td>
+                <td class="text-end">${expeditionFeeDisplay}</td>
                 <td class="text-end">${formatAmount(report.total_packaging_fees)}</td>
                 <td class="text-end">${formatAmount(report.total_storage_fees)}</td>
                 <td class="text-end ${amountToRemitClass}">${formatAmount(report.amount_to_remit)}</td>
@@ -228,6 +232,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 reportContent += `*Total Frais de stockage (jour) :* ${formatAmount(reportDetails.total_storage_fees)}\n`;
             }
             if (parseFloat(reportDetails.total_expedition_fees || 0) > 0) {
+                // CORRECTION: Ajout de reportDetails.total_expedition_fees au résumé détaillé
                 reportContent += `*Total Frais d'expédition :* ${formatAmount(reportDetails.total_expedition_fees)}\n`;
             }
             reportContent += `*Créances antérieures :* ${formatAmount(reportDetails.previous_debts)}\n\n`;
@@ -302,6 +307,17 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         });
     }
+    
+    // Événement pour l'export PDF
+    const exportPdfBtn = document.getElementById('exportPdfBtn');
+    if (exportPdfBtn) {
+        exportPdfBtn.addEventListener('click', () => {
+            const date = reportDateInput.value;
+            if (!date) return showNotification('Veuillez sélectionner une date pour l\'export PDF.', 'warning');
+            window.open(`${API_BASE_URL}/reports/export-pdf?date=${date}`, '_blank');
+        });
+    }
+
 
     // Initialisation de la page
     const initializePage = () => {
