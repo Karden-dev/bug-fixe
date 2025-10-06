@@ -2,7 +2,7 @@
 
 document.addEventListener('DOMContentLoaded', () => {
     // --- CONFIGURATION ---
-    const API_BASE_URL = 'https://app.winkexpress.online';
+    const API_BASE_URL = 'https://app.winkexpress.online/api';
     const CURRENT_USER_ID = 1; // À remplacer par l'ID de l'utilisateur connecté
 
     // --- CACHES & ÉTAT ---
@@ -465,3 +465,4 @@ document.addEventListener('DOMContentLoaded', () => {
 
     initializeApp();
 });
+
