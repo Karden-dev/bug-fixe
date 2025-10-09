@@ -1,8 +1,6 @@
 // src/models/order.model.js
 const moment = require('moment');
 const balanceService = require('../services/balance.service');
-// L'import de cashModel n'est plus nécessaire ici pour la création automatique
-// const cashModel = require('./cash.model'); 
 
 let dbConnection;
 
@@ -26,192 +24,219 @@ module.exports = {
             for (const item of orderData.items) {
                 await connection.execute(itemQuery, [orderId, item.item_name, item.quantity, item.amount]);
             }
+            await connection.execute('INSERT INTO order_history (order_id, action, user_id) VALUES (?, ?, ?)', [orderId, 'Commande créée', orderData.created_by]);
             
-            const historyQuery = 'INSERT INTO order_history (order_id, action, user_id) VALUES (?, ?, ?)';
-            await connection.execute(historyQuery, [orderId, 'Commande créée', orderData.created_by]);
-            
+            const orderDate = moment().format('YYYY-MM-DD');
+            await balanceService.updateDailyBalance(connection, {
+                shop_id: orderData.shop_id,
+                date: orderDate,
+                orders_sent: 1,
+                expedition_fees: parseFloat(orderData.expedition_fee || 0)
+            });
+
+            await balanceService.syncBalanceDebt(connection, orderData.shop_id, orderDate);
+
             await connection.commit();
-            return orderId;
+            return { success: true, orderId };
         } catch (error) {
-            await connection.rollback();
-            throw error;
+            await connection.rollback(); throw error;
+        } finally {
+            connection.release();
+        }
+    },
+    
+    update: async (orderId, orderData, userId) => {
+        const connection = await dbConnection.getConnection();
+        try {
+            await connection.beginTransaction();
+
+            const [oldOrderRows] = await connection.execute('SELECT o.*, s.bill_packaging, s.packaging_price FROM orders o JOIN shops s ON o.shop_id = s.id WHERE o.id = ?', [orderId]);
+            if (oldOrderRows.length === 0) throw new Error("Commande non trouvée.");
+            const oldOrder = oldOrderRows[0];
+
+            // Annuler l'impact de l'ancienne version
+            const oldImpact = balanceService.getBalanceImpactForStatus(oldOrder);
+            await balanceService.updateDailyBalance(connection, {
+                shop_id: oldOrder.shop_id, date: moment(oldOrder.created_at).format('YYYY-MM-DD'),
+                orders_sent: -1,
+                orders_delivered: -oldImpact.orders_delivered,
+                revenue_articles: -oldImpact.revenue_articles,
+                delivery_fees: -oldImpact.delivery_fees,
+                packaging_fees: -oldImpact.packaging_fees,
+                expedition_fees: -parseFloat(oldOrder.expedition_fee || 0)
+            });
+
+            const { items, ...orderFields } = orderData;
+            const fieldsToUpdate = Object.keys(orderFields).map(key => `${key} = ?`).join(', ');
+            const params = [...Object.values(orderFields), userId, orderId];
+            await connection.execute(`UPDATE orders SET ${fieldsToUpdate}, updated_by = ?, updated_at = NOW() WHERE id = ?`, params);
+
+            if (items) {
+                await connection.execute('DELETE FROM order_items WHERE order_id = ?', [orderId]);
+                const itemQuery = 'INSERT INTO order_items (order_id, item_name, quantity, amount) VALUES (?, ?, ?, ?)';
+                for (const item of items) {
+                    await connection.execute(itemQuery, [orderId, item.item_name, item.quantity, item.amount]);
+                }
+            }
+            
+            const [newOrderRows] = await connection.execute('SELECT o.*, s.bill_packaging, s.packaging_price FROM orders o JOIN shops s ON o.shop_id = s.id WHERE o.id = ?', [orderId]);
+            const newOrder = newOrderRows[0];
+            const newDate = moment(newOrder.created_at).format('YYYY-MM-DD');
+
+            // Appliquer le nouvel impact
+            const newImpact = balanceService.getBalanceImpactForStatus(newOrder);
+            await balanceService.updateDailyBalance(connection, {
+                shop_id: newOrder.shop_id, date: newDate,
+                orders_sent: 1,
+                orders_delivered: newImpact.orders_delivered,
+                revenue_articles: newImpact.revenue_articles,
+                delivery_fees: newImpact.delivery_fees,
+                packaging_fees: newImpact.packaging_fees,
+                expedition_fees: parseFloat(newOrder.expedition_fee || 0)
+            });
+            
+            // Synchroniser les dettes pour l'ancien et le nouveau bilan si la date ou le marchand ont changé
+            await balanceService.syncBalanceDebt(connection, oldOrder.shop_id, moment(oldOrder.created_at).format('YYYY-MM-DD'));
+            if (oldOrder.shop_id != newOrder.shop_id || moment(oldOrder.created_at).format('YYYY-MM-DD') != newDate) {
+                await balanceService.syncBalanceDebt(connection, newOrder.shop_id, newDate);
+            }
+
+            await connection.execute('INSERT INTO order_history (order_id, action, user_id) VALUES (?, ?, ?)', [orderId, 'Mise à jour de la commande', userId]);
+            await connection.commit();
+            return { success: true };
+        } catch (error) {
+            await connection.rollback(); throw error;
         } finally {
             connection.release();
         }
     },
 
-    findById: async (id) => {
-        const query = `
-            SELECT o.*, s.name as shop_name, u.name as deliveryman_name, c.name as creator_name
-            FROM orders o
-            LEFT JOIN shops s ON o.shop_id = s.id
-            LEFT JOIN users u ON o.deliveryman_id = u.id
-            LEFT JOIN users c ON o.created_by = c.id
-            WHERE o.id = ?
-        `;
-        const [rows] = await dbConnection.execute(query, [id]);
-        if (rows.length === 0) return null;
-
-        const order = rows[0];
-        const [items] = await dbConnection.execute('SELECT * FROM order_items WHERE order_id = ?', [id]);
-        order.items = items;
-        
-        const [history] = await dbConnection.execute(`
-            SELECT h.*, u.name as user_name 
-            FROM order_history h 
-            LEFT JOIN users u ON h.user_id = u.id 
-            WHERE h.order_id = ? ORDER BY h.created_at DESC`, [id]);
-        order.history = history;
-
-        return order;
-    },
-
-    findAll: async (filters) => {
-        let query = `
-            SELECT o.*, s.name as shop_name, u.name as deliveryman_name
-            FROM orders o
-            JOIN shops s ON o.shop_id = s.id
-            LEFT JOIN users u ON o.deliveryman_id = u.id
-            WHERE 1=1
-        `;
-        const params = [];
-
-        if (filters.startDate && filters.endDate) {
-            query += ' AND DATE(o.created_at) BETWEEN ? AND ?';
-            params.push(filters.startDate, filters.endDate);
-        }
-        if (filters.status) {
-            query += ' AND o.status = ?';
-            params.push(filters.status);
-        }
-        if (filters.deliverymanId) {
-            query += ' AND o.deliveryman_id = ?';
-            params.push(filters.deliverymanId);
-        }
-        if (filters.shopId) {
-            query += ' AND o.shop_id = ?';
-            params.push(filters.shopId);
-        }
-        if (filters.search) {
-            query += ' AND (o.id LIKE ? OR o.customer_phone LIKE ? OR s.name LIKE ? OR u.name LIKE ?)';
-            const searchTerm = `%${filters.search}%`;
-            params.push(searchTerm, searchTerm, searchTerm, searchTerm);
-        }
-
-        query += ' ORDER BY o.created_at DESC';
-        if (filters.limit && filters.offset !== undefined) {
-            query += ' LIMIT ? OFFSET ?';
-            params.push(parseInt(filters.limit), parseInt(filters.offset));
-        }
-
-        const [rows] = await dbConnection.execute(query, params);
-        return rows;
-    },
-
-    count: async (filters) => {
-        let query = `
-            SELECT COUNT(o.id) as total
-            FROM orders o
-            JOIN shops s ON o.shop_id = s.id
-            LEFT JOIN users u ON o.deliveryman_id = u.id
-            WHERE 1=1
-        `;
-        const params = [];
-        if (filters.startDate && filters.endDate) {
-            query += ' AND DATE(o.created_at) BETWEEN ? AND ?';
-            params.push(filters.startDate, filters.endDate);
-        }
-        if (filters.status) {
-            query += ' AND o.status = ?';
-            params.push(filters.status);
-        }
-        if (filters.deliverymanId) {
-            query += ' AND o.deliveryman_id = ?';
-            params.push(filters.deliverymanId);
-        }
-        if (filters.shopId) {
-            query += ' AND o.shop_id = ?';
-            params.push(filters.shopId);
-        }
-        if (filters.search) {
-            query += ' AND (o.id LIKE ? OR o.customer_phone LIKE ? OR s.name LIKE ? OR u.name LIKE ?)';
-            const searchTerm = `%${filters.search}%`;
-            params.push(searchTerm, searchTerm, searchTerm, searchTerm);
-        }
-        const [rows] = await dbConnection.execute(query, params);
-        return rows[0].total;
-    },
-    
-    update: async (id, data, userId) => {
-        const allowedFields = ['shop_id', 'deliveryman_id', 'customer_name', 'customer_phone', 'delivery_location', 'article_amount', 'delivery_fee', 'expedition_fee', 'status', 'payment_status', 'amount_received'];
-        const fields = Object.keys(data).filter(key => allowedFields.includes(key));
-        if (fields.length === 0) {
-            throw new Error("Aucun champ valide à mettre à jour.");
-        }
-
-        const setClause = fields.map(field => `${field} = ?`).join(', ');
-        const query = `UPDATE orders SET ${setClause}, updated_by = ? WHERE id = ?`;
-        
-        const params = fields.map(field => data[field]);
-        params.push(userId, id);
-
-        const [result] = await dbConnection.execute(query, params);
-        
-        // Ajout à l'historique
-        const historyDetails = fields.map(field => `${field}: ${data[field]}`).join('; ');
-        await dbConnection.execute(
-            'INSERT INTO order_history (order_id, action, user_id) VALUES (?, ?, ?)',
-            [id, `Mise à jour: ${historyDetails}`, userId]
-        );
-
-        return result;
-    },
-
-    /**
-     * ## FONCTION MISE À JOUR ##
-     * Supprime toute la logique de création de transaction de versement.
-     * Met à jour uniquement le statut de la commande et son historique.
-     */
-    updateStatus: async (orderId, newStatus, amountReceived, paymentStatus, userId) => {
+    updateStatus: async (orderId, newStatus, amountReceived = null, newPaymentStatus = null, userId) => {
         const connection = await dbConnection.getConnection();
         try {
             await connection.beginTransaction();
-
-            const [orderRows] = await connection.execute('SELECT * FROM orders WHERE id = ?', [orderId]);
-            if (orderRows.length === 0) {
-                throw new Error("Commande non trouvée.");
-            }
+            const [orderRows] = await connection.execute('SELECT o.*, s.bill_packaging, s.packaging_price FROM orders o JOIN shops s ON o.shop_id = s.id WHERE o.id = ?', [orderId]);
             const order = orderRows[0];
+            if (!order) throw new Error("Commande non trouvée.");
+            const orderDate = moment(order.created_at).format('YYYY-MM-DD');
 
-            const updateData = { status: newStatus };
-            if (paymentStatus) {
-                updateData.payment_status = paymentStatus;
+            const oldImpact = balanceService.getBalanceImpactForStatus(order);
+            await balanceService.updateDailyBalance(connection, {
+                shop_id: order.shop_id, date: orderDate,
+                orders_delivered: -oldImpact.orders_delivered,
+                revenue_articles: -oldImpact.revenue_articles,
+                delivery_fees: -oldImpact.delivery_fees,
+                packaging_fees: -oldImpact.packaging_fees
+            });
+
+            const updatedOrderData = { ...order, status: newStatus };
+            if (newStatus === 'delivered') { updatedOrderData.payment_status = newPaymentStatus; } 
+            else if (newStatus === 'cancelled') {
+                updatedOrderData.payment_status = 'cancelled'; // FORCER LE STATUT DE PAIEMENT À ANNULÉ
+                amountReceived = null; // Réinitialiser pour la requête UPDATE et la logique d'impact
             }
-            if (amountReceived !== null && amountReceived !== undefined) {
-                updateData.amount_received = parseFloat(amountReceived);
+            else if (newStatus === 'failed_delivery') {
+                updatedOrderData.amount_received = amountReceived;
+                updatedOrderData.payment_status = (amountReceived > 0) ? 'cash' : 'paid_to_supplier';
             }
-
-            const fields = Object.keys(updateData);
-            const setClause = fields.map(field => `${field} = ?`).join(', ');
-            const query = `UPDATE orders SET ${setClause}, updated_by = ? WHERE id = ?`;
             
-            const params = fields.map(field => updateData[field]);
-            params.push(userId, orderId);
+            const newImpact = balanceService.getBalanceImpactForStatus(updatedOrderData);
+            await balanceService.updateDailyBalance(connection, {
+                shop_id: order.shop_id, date: orderDate,
+                orders_delivered: newImpact.orders_delivered,
+                revenue_articles: newImpact.revenue_articles,
+                delivery_fees: newImpact.delivery_fees,
+                packaging_fees: newImpact.packaging_fees
+            });
+
+            await connection.execute('UPDATE orders SET status = ?, payment_status = ?, amount_received = ?, updated_by = ?, updated_at = NOW() WHERE id = ?', [newStatus, updatedOrderData.payment_status, amountReceived, userId, orderId]);
+            await balanceService.syncBalanceDebt(connection, order.shop_id, orderDate);
             
-            await connection.execute(query, params);
-
-            const historyMessage = `Statut changé à : ${newStatus}`;
-            await connection.execute('INSERT INTO order_history (order_id, action, user_id) VALUES (?, ?, ?)', [orderId, historyMessage, userId]);
-
-            // --- LOGIQUE DE CRÉATION DE VERSEMENT AUTOMATIQUE SUPPRIMÉE ---
-            // L'ancien code qui créait une transaction "remittance" ici a été retiré.
-            // La responsabilité est maintenant entièrement gérée par la page "Caisse".
-
+            await connection.execute('INSERT INTO order_history (order_id, action, user_id) VALUES (?, ?, ?)', [orderId, `Statut changé en ${newStatus}`, userId]);
             await connection.commit();
-            return { success: true };
         } catch (error) {
-            await connection.rollback();
-            throw error;
+            await connection.rollback(); throw error;
+        } finally {
+            connection.release();
+        }
+    },
+    
+    remove: async (orderId) => {
+        const connection = await dbConnection.getConnection();
+        try {
+            await connection.beginTransaction();
+            const [orderRows] = await connection.execute('SELECT o.*, s.bill_packaging, s.packaging_price FROM orders o JOIN shops s ON o.shop_id = s.id WHERE o.id = ?', [orderId]);
+            if (orderRows.length === 0) throw new Error("Commande non trouvée.");
+            const order = orderRows[0];
+            const orderDate = moment(order.created_at).format('YYYY-MM-DD');
+
+            const impact = balanceService.getBalanceImpactForStatus(order);
+            await balanceService.updateDailyBalance(connection, {
+                shop_id: order.shop_id, date: orderDate,
+                orders_sent: -1,
+                orders_delivered: -impact.orders_delivered,
+                revenue_articles: -impact.revenue_articles,
+                delivery_fees: -impact.delivery_fees,
+                packaging_fees: -impact.packaging_fees,
+                expedition_fees: -parseFloat(order.expedition_fee || 0)
+            });
+
+            await balanceService.syncBalanceDebt(connection, order.shop_id, orderDate);
+
+            await connection.execute('DELETE FROM order_history WHERE order_id = ?', [orderId]);
+            await connection.execute('DELETE FROM order_items WHERE order_id = ?', [orderId]);
+            const [result] = await connection.execute('DELETE FROM orders WHERE id = ?', [orderId]);
+            
+            await connection.commit();
+            return result;
+        } catch (error) {
+            await connection.rollback(); throw error;
+        } finally {
+            connection.release();
+        }
+    },
+    
+    findAll: async (filters) => {
+        const connection = await dbConnection.getConnection();
+        try {
+            let query = `SELECT o.*, s.name AS shop_name, u.name AS deliveryman_name FROM orders o LEFT JOIN shops s ON o.shop_id = s.id LEFT JOIN users u ON o.deliveryman_id = u.id WHERE 1=1`;
+            const params = [];
+            if (filters.search) {
+                // AMÉLIORATION : Ajout de la recherche sur le nom du livreur (u.name)
+                query += ` AND (o.customer_name LIKE ? OR o.customer_phone LIKE ? OR o.delivery_location LIKE ? OR s.name LIKE ? OR u.name LIKE ?)`;
+                const searchTerm = `%${filters.search}%`;
+                params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+            }
+            if (filters.startDate) query += ` AND o.created_at >= ?`, params.push(moment(filters.startDate).startOf('day').format('YYYY-MM-DD HH:mm:ss'));
+            if (filters.endDate) query += ` AND o.created_at <= ?`, params.push(moment(filters.endDate).endOf('day').format('YYYY-MM-DD HH:mm:ss'));
+            if (filters.status) query += ` AND o.status = ?`, params.push(filters.status);
+            query += ` ORDER BY o.created_at DESC`;
+
+            const [rows] = await connection.execute(query, params);
+            const ordersWithDetails = await Promise.all(rows.map(async (order) => {
+                const [items] = await connection.execute('SELECT * FROM order_items WHERE order_id = ?', [order.id]);
+                return { ...order, items };
+            }));
+            return ordersWithDetails;
+        } finally {
+            connection.release();
+        }
+    },
+    
+    findById: async (id) => {
+        const connection = await dbConnection.getConnection();
+        try {
+            const orderQuery = 'SELECT o.*, u.name AS deliveryman_name, s.name AS shop_name FROM orders o LEFT JOIN users u ON o.deliveryman_id = u.id LEFT JOIN shops s ON o.shop_id = s.id WHERE o.id = ?';
+            const [orders] = await connection.execute(orderQuery, [id]);
+            const order = orders[0];
+            if (!order) return null;
+            const itemsQuery = 'SELECT * FROM order_items WHERE order_id = ?';
+            const [items] = await connection.execute(itemsQuery, [id]);
+            order.items = items;
+            const historyQuery = 'SELECT oh.*, u.name AS user_name FROM order_history oh LEFT JOIN users u ON oh.user_id = u.id WHERE oh.order_id = ? ORDER BY oh.created_at DESC';
+            const [history] = await connection.execute(historyQuery, [id]);
+            order.history = history;
+            return order;
         } finally {
             connection.release();
         }
@@ -221,15 +246,13 @@ module.exports = {
         const connection = await dbConnection.getConnection();
         try {
             await connection.beginTransaction();
-            
-            await module.exports.update(orderId, { deliveryman_id: deliverymanId }, userId);
-            await module.exports.updateStatus(orderId, 'in_progress', null, 'pending', userId);
-
             const [deliverymanRows] = await connection.execute('SELECT name FROM users WHERE id = ?', [deliverymanId]);
             const deliverymanName = deliverymanRows[0]?.name || 'Inconnu';
+            const query = 'UPDATE orders SET deliveryman_id = ?, status = ?, payment_status = ?, updated_by = ?, updated_at = NOW() WHERE id = ?';
+            await connection.execute(query, [deliverymanId, 'in_progress', 'pending', userId, orderId]);
+            const historyQuery = 'INSERT INTO order_history (order_id, action, user_id) VALUES (?, ?, ?)';
             const historyMessage = `Commande assignée au livreur : ${deliverymanName}`;
-            await connection.execute('INSERT INTO order_history (order_id, action, user_id) VALUES (?, ?, ?)', [orderId, historyMessage, userId]);
-            
+            await connection.execute(historyQuery, [orderId, historyMessage, userId]);
             await connection.commit();
             return { success: true };
         } catch (error) {
