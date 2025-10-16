@@ -49,7 +49,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             showNotification("Le gestionnaire de synchronisation n'est pas prêt.", "danger");
             return;
         }
-        const requestData = { url, method, payload, timestamp: Date.now() };
+        const requestData = { url, method, payload, timestamp: Date.now(), token: currentUser.token }; // Correction: Ajout du token
         await window.syncManager.put(requestData);
 
         if ('serviceWorker' in navigator && 'SyncManager' in window) {
@@ -112,6 +112,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             const paymentText = paymentTranslations[order.payment_status] || order.payment_status;
             const statusDotClass = `status-dot status-${order.status}`;
             const paymentDotClass = `payment-dot payment-${order.payment_status}`;
+            
+            // DÉBUT DE LA MODIFICATION
+            // NOUVEAU: Vérifie si le statut est final (Livré, Échec de livraison, Retourné)
+            const isFinalStatus = order.status === 'delivered' || order.status === 'failed_delivery' || order.status === 'returned';
+            // FIN DE LA MODIFICATION
+            
             orderCard.innerHTML = `
                 <div class="d-flex justify-content-between align-items-center">
                     <h6 class="order-id">Commande #${order.id}</h6>
@@ -119,8 +125,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                         <div class="dropdown">
                             <button class="btn btn-sm btn-light dropdown-toggle" type="button" data-bs-toggle="dropdown"><i class="bi bi-gear"></i></button>
                             <ul class="dropdown-menu">
-                                <li><a class="dropdown-item status-btn" data-order-id="${order.id}" href="#">Statuer la commande</a></li>
-                                <li><a class="dropdown-item return-btn" data-order-id="${order.id}" href="#">Déclarer un retour</a></li>
+                                <li>
+                                    <a class="dropdown-item status-btn ${isFinalStatus ? 'disabled text-muted' : ''}" 
+                                       data-order-id="${order.id}" href="#">
+                                       Statuer la commande
+                                    </a>
+                                </li>
+                                <li>
+                                    <a class="dropdown-item return-btn ${isFinalStatus ? 'disabled text-muted' : ''}" 
+                                       data-order-id="${order.id}" href="#">
+                                       Déclarer un retour
+                                    </a>
+                                </li>
                             </ul>
                         </div>
                         <div class="dropdown">
@@ -253,6 +269,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     ordersContainer.addEventListener('click', async (e) => {
         const target = e.target.closest('.status-btn, .return-btn');
         if (!target) return;
+        
+        // DÉBUT DE LA MODIFICATION
+        // NOUVEAU: Intercepter les clics si le bouton est désactivé
+        if (target.classList.contains('disabled')) {
+            e.preventDefault(); // Empêche l'action par défaut du lien
+            return;
+        }
+        // FIN DE LA MODIFICATION
+        
         currentOrderId = target.dataset.orderId;
         if (target.classList.contains('status-btn')) {
             document.getElementById('actionModalOrderId').textContent = currentOrderId;
